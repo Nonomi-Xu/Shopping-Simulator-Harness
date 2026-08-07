@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Generated from the compressed source dataset.
+data/fine_items_eval_train_all.json
+
+# Generated preview and search databases.
+data/test/*.duckdb
+data/product_search.sqlite*
