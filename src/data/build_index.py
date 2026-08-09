@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 
-HARNESS_ENV = Path(__file__).resolve().parents[1]
+HARNESS_ENV = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(HARNESS_ENV))
 
 from src.data.search_bm25 import build_index, sha256_file
@@ -62,14 +62,21 @@ def parse_args():
     parser.add_argument(
         "--products",
         type=Path,
-        default=HARNESS_ENV / "data" / "items_eval_train.json",
+        default=HARNESS_ENV / "data" / "fine_items_eval_train_all.json",
+        help="解压后的商品 JSON 文件",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=HARNESS_ENV / "search_engine" / "products.sqlite3",
+        default=HARNESS_ENV / "data" / "product_search.sqlite3",
+        help="SQLite BM25 索引输出路径",
     )
-    parser.add_argument("--manifest", type=Path)
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=HARNESS_ENV / "data" / "product_search.manifest.json",
+        help="索引 manifest 输出路径",
+    )
     return parser.parse_args()
 
 

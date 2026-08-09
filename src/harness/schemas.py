@@ -22,7 +22,7 @@ class GetProductAction(BaseModel):
 
 class RecommendationItem(BaseModel):
     asin: str
-    option: str | None = None
+    selected_options: dict[str, str]
     reason: str
 
 
