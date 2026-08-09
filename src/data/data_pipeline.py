@@ -10,7 +10,7 @@ from search_bm25 import (
     sha256_file,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 GZIP_PATH = PROJECT_ROOT / "data" /"fine_items_eval_train_all.json.gz"
 INDEX_PATH = PROJECT_ROOT / "data" / "product_search.sqlite"

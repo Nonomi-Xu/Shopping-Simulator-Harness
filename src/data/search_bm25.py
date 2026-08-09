@@ -221,8 +221,7 @@ class MultiFieldBM25Searcher:
         self.index_path = Path(index_path).resolve()
         if not self.index_path.is_file():
             raise SearchIndexError(
-                f"Environment v2 index not found: {self.index_path}. "
-                "Run scripts/build_index.py first."
+                f"Environment index not found: {self.index_path}. "
             )
         uri = f"file:{self.index_path}?mode=ro"
         self._connection = sqlite3.connect(uri, uri=True, check_same_thread=False)

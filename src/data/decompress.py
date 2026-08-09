@@ -4,6 +4,10 @@ import gzip
 import shutil
 from pathlib import Path
 
+HARNESS_ENV = Path(__file__).resolve().parents[2]
+
+GZIP_PATH = HARNESS_ENV / "data" /"fine_items_eval_train_all.json.gz"
+
 
 def decompress_gzip(input_path: str, output_path: str | None = None, overwrite: bool = True) -> Path:
     """
@@ -42,4 +46,4 @@ def decompress_gzip(input_path: str, output_path: str | None = None, overwrite: 
 
 
 if __name__ == "__main__":
-    decompress_gzip("fine_items_eval_train_all.json.gz", overwrite=True)
+    decompress_gzip(GZIP_PATH, overwrite=True)
