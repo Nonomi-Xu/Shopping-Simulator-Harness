@@ -3,16 +3,18 @@ from pathlib import Path
 
 import duckdb
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ENV = Path(__file__).resolve().parents[3]
 
-sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(HARNESS_ENV))
+
+TEST_DATABASE_PATH = HARNESS_ENV / "data" / "test" / "preview.duckdb"
 
 from decompress import decompress_gzip
 
 
 def json_to_duckdb(
     json_path: str,
-    database_path: str | Path = "preview.duckdb",
+    database_path: str | Path = TEST_DATABASE_PATH,
     table_name: str = "items",
 ) -> Path:
     '''

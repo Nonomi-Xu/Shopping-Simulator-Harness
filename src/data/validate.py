@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-import argparse
 import json
-from .search_bm25 import sha256_file
+from .search_bm25 import sha256_file, INDEX_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION
+from .build_index import iter_json_array
 
 HARNESS_ENV = Path(__file__).resolve().parents[2]
 
 INDEX_PATH = HARNESS_ENV / "data" / "product_search.sqlite3"
 MANIFEST_PATH = HARNESS_ENV / "data" / "product_search.manifest.json"
 
-from .build_index import iter_json_array
+
 
 def validate_products(path: Path) -> dict:
     """校验商品数据，并返回可审计的数据统计。"""
@@ -59,6 +59,12 @@ def index_is_current(product_sha256: str) -> bool:
 
     expected_index_sha = manifest.get("index_sha256")
     if not expected_index_sha:
+        return False
+
+    if manifest.get("index_schema_version") != INDEX_SCHEMA_VERSION:
+        return False
+
+    if manifest.get("catalog_schema_version") != CATALOG_SCHEMA_VERSION:
         return False
 
     return sha256_file(INDEX_PATH) == expected_index_sha

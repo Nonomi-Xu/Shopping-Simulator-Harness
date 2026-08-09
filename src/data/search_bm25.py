@@ -10,8 +10,11 @@ import re
 import sqlite3
 import unicodedata
 
+from .product_projection import project_public_product
+
 SEARCH_VERSION = "shopsimulator-multifield-bm25-v2"
 INDEX_SCHEMA_VERSION = 1
+CATALOG_SCHEMA_VERSION = 1
 _HAN_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 _LATIN_OR_NUMBER = re.compile(r"[a-z0-9]+(?:[._+\-/][a-z0-9]+)*")
 _MODEL = re.compile(
@@ -166,6 +169,24 @@ def build_index(
             "asin UNINDEXED, title, brand, category, model, attributes, options, bullets,"
             " tokenize='unicode61 remove_diacritics 2')"
         )
+        connection.execute(
+            """
+            CREATE TABLE product_catalog (
+                asin TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                brand TEXT,
+                category TEXT NOT NULL,
+                price_min REAL,
+                price_max REAL,
+                pricing TEXT NOT NULL,
+                description TEXT NOT NULL,
+                attributes TEXT NOT NULL,
+                customization_options TEXT NOT NULL,
+                variant_combinations TEXT NOT NULL,
+                images TEXT NOT NULL
+            )
+            """
+        )
         seen = set()
         count = 0
         for product in products:
@@ -173,11 +194,87 @@ def build_index(
             if not asin or asin == "nan" or asin in seen:
                 continue
             fields = product_fields(product)
+            public_product = project_public_product(product)
+
             connection.execute(
-                "INSERT INTO products(asin, title, brand, category, model, attributes, options, bullets)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (asin, *(_tokenized(fields[field]) for field in FIELDS)),
+                """
+                INSERT INTO products(
+                    asin,
+                    title,
+                    brand,
+                    category,
+                    model,
+                    attributes,
+                    options,
+                    bullets
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    asin,
+                    *(
+                        _tokenized(fields[field])
+                        for field in FIELDS
+                    ),
+                ),
             )
+
+            connection.execute(
+                """
+                INSERT INTO product_catalog(
+                    asin,
+                    title,
+                    brand,
+                    category,
+                    price_min,
+                    price_max,
+                    pricing,
+                    description,
+                    attributes,
+                    customization_options,
+                    variant_combinations,
+                    images
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    public_product["asin"],
+                    public_product["title"],
+                    public_product["brand"],
+                    public_product["category"],
+                    public_product["price_min"],
+                    public_product["price_max"],
+                    json.dumps(
+                        public_product["pricing"],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    public_product["description"],
+                    json.dumps(
+                        public_product["attributes"],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(
+                        public_product["customization_options"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(
+                        public_product["variant_combinations"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(
+                        public_product["images"],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+
             seen.add(asin)
             count += 1
         manifest = {
@@ -191,6 +288,8 @@ def build_index(
             "tie_breaker": "asin-ascending",
             "python_version": platform.python_version(),
             "sqlite_version": sqlite3.sqlite_version,
+            "catalog_schema_version": CATALOG_SCHEMA_VERSION,
+            "public_projection_version": "product-public-v1",
         }
         connection.execute("CREATE TABLE manifest(payload TEXT NOT NULL)")
         connection.execute(
@@ -208,6 +307,7 @@ def build_index(
     temporary.replace(output)
     manifest["index_sha256"] = sha256_file(output)
     return manifest
+
 
 def _fts_query(tokens: tuple[str, ...]) -> str:
     # Every token is generated by this module and contains no quote, but quoting
