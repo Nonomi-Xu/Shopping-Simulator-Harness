@@ -1,0 +1,4 @@
+interface:
+  display_name: "Shopping Agent"
+  short_description: "Search, compare, and submit auditable product recommendations"
+  default_prompt: "Use $shopping-agent to analyze this shopping request and produce an evidence-based recommendation."

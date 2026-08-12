@@ -23,8 +23,10 @@ Shopping Simulator Harness 是一个轻量、可审计的购物推荐评测核�
 任务数据转换为只读商品目录和确定性搜索索引，为 Agent 提供公开任务与商品信息，并在
 终局使用私有标注检查推荐结果。
 
-Harness 不负责模型训练，也不内置某一种 Agent 实现。模型可以使用任意推理框架，只要
-最终提交结构化的商品 ASIN、所选规格和推荐理由，就可以接入同一套确定性评测协议。
+Harness 不负责模型训练，并保持模型 Provider 中立。项目内置了可版本化的
+`shopping-agent` Skill，用于定义 Agent 身份、购物策略和工具契约；`AgentRunner`
+加载该 Skill，驱动 Provider 调用 Harness 工具并在终局提交结构化推荐。整个加载、
+分析、工具执行和评估链路都位于本仓库，不依赖 Shopping GRPO 项目。
 
 ## 项目做了什么？
 
@@ -35,11 +37,12 @@ flowchart LR
     B --> D[私有任务事实]
     C --> E[SQLite FTS5 多字段 BM25 索引]
     D --> F[公开任务 / 私有答案隔离]
-    F --> G[Agent 读取 Query]
-    E --> H[搜索与商品详情]
-    G --> I[Agent]
-    H --> I
-    I --> J[最多 5 个结构化推荐]
+    F --> G[AgentRunner 创建 Session]
+    M[shopping-agent Skill] --> G
+    G <--> I[模型 Provider]
+    G <--> H[Harness 搜索与商品详情]
+    E --> H
+    G --> J[最多 5 个结构化推荐]
     J --> K[确定性 Evaluator v1]
     D --> K
     K --> L[Reward、终止原因与逐项审计结果]
@@ -53,7 +56,10 @@ flowchart LR
 | 确定性评分 | 校验提交格式、商品、规格与目标匹配情况 | `evaluate_submission` |
 | 单任务 Session | 守卫搜索、详情访问与终局提交，记录有界可回放轨迹 | `ShoppingSession` |
 | Harness 管理层 | 校验数据契约，创建、分发、查询和释放多个隔离 Session | `ShoppingHarness` |
-| DeepSeek 客户端 | 可选的同步 Chat Completions 调用封装 | `DeepSeekClient` |
+| Agent 定义与策略 | 约束检索、候选比较、规格选择和终局提交 | `skills/shopping-agent/SKILL.md` |
+| 模型 Provider | 统一消息、工具调用、终止原因和 Token Usage | `ModelProvider` |
+| DeepSeek Provider | DeepSeek Chat Completions 请求、解析与有界重试 | `DeepSeekProvider` |
+| Agent Runner | 加载 Skill，驱动单工具循环并生成完整运行审计结果 | `AgentRunner` |
 
 ## 核心设计
 
@@ -242,30 +248,44 @@ with ShoppingHarness(
 print(result.model_dump_json(indent=2))
 ```
 
-## 使用 DeepSeek（可选）
+## 使用 Agent Runner + DeepSeek（可选）
 
-仓库提供一个不依赖第三方 HTTP SDK 的同步客户端，可用于外部 Agent 或实验代码。它与
-确定性 Evaluator 相互独立，不会参与 Reward 计算。
+仓库提供不依赖第三方 HTTP SDK 的同步 DeepSeek Provider。`AgentRunner` 只依赖统一的
+`ModelProvider` 协议：它会加载完整 `shopping-agent` Skill，根据 Action Schema 暴露
+三个工具，逐轮执行一个工具调用并回灌公开 observation，直到提交或明确失败。
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
 ```
 
 ```python
-from src.harness.api.deepseek import call_deepseek
+from pathlib import Path
 
-answer = call_deepseek(
-    "请根据候选商品生成结构化推荐。",
-    system_prompt="你是一个中文购物推荐 Agent。",
-    temperature=0,
+from src.harness.agent import AgentRunner
+from src.harness.harness import ShoppingHarness
+from src.harness.providers import DeepSeekProvider
+
+provider = DeepSeekProvider(
+    model="deepseek-v4-flash",
+    default_parameters={"temperature": 0},
 )
-print(answer)
+data_dir = Path("data")
+with ShoppingHarness(
+    products_path=data_dir / "fine_items_eval_train_all.json",
+    index_path=data_dir / "product_search.sqlite3",
+) as harness:
+    task_id = harness.sample_task_ids("eval", 1, seed=42)[0]
+    result = AgentRunner(provider=provider, harness=harness).run(task_id)
+
+print(result.model_dump_json(indent=2))
 ```
 
 默认 Base URL 为 `https://api.deepseek.com`，默认模型名为
-`deepseek-v4-flash`。也可以在 `DeepSeekClient` 或 `call_deepseek` 中显式传入
-`api_key`、`base_url`、`model` 和 `timeout`。客户端只支持非流式 Chat
-Completions。
+`deepseek-v4-flash`。可以显式传入 `api_key`、`base_url`、`model`、`timeout`、
+`max_retries` 和默认推理参数。Provider 只支持非流式 Chat Completions；旧的
+`DeepSeekClient` 和 `call_deepseek` 导入仍作为兼容层保留。Runner 默认要求模型调用
+工具；文本代替提交、同轮多个工具、Provider 错误和模型轮次耗尽都会返回带完整消息、
+Token Usage 与 Session 快照的 `AgentRunResult`。
 
 ## 运行测试
 
@@ -274,8 +294,9 @@ python -m unittest discover -s src/harness/test -p "*.py" -v
 ```
 
 当前测试覆盖公开字段防泄漏、BM25 顺序、索引与 Manifest 校验、任务规格归一化、
-Evaluator 各终局分支，以及 DeepSeek 请求构造和错误处理。未解析规格扫描脚本是数据
-诊断工具，不会调用外部 API。
+Evaluator 各终局分支、Agent 完整工具循环与失败边界，以及 Provider 消息契约、
+DeepSeek 工具调用解析、Token Usage、重试和错误处理。未解析规格扫描脚本是数据诊断
+工具，不会调用外部 API。
 
 ## 仓库结构
 
@@ -296,21 +317,30 @@ src/harness/
   evaluator.py                    确定性推荐评分
   session.py                      单任务工具状态机与公开轨迹
   harness.py                      多 Session 生命周期与统一分发入口
-  api/deepseek.py                 可选 DeepSeek Chat Completions 客户端
+  agent/                          Skill 加载、工具定义与 AgentRunner 循环
+  providers/base.py               Provider 协议、消息、工具调用和 Usage Schema
+  providers/deepseek.py           DeepSeek Chat Completions Provider
+  api/                            旧 DeepSeek 客户端导入兼容层
   test/                           契约测试与数据诊断工具
+skills/
+  shopping-agent/                 Agent 定义、购物策略与 Harness 工具契约
 ```
+
+`skills/` 是本项目的 Skill 库。每个 Skill 目录以 `SKILL.md` 为入口；其中的
+`references/` 只是该 Skill 按需加载的参考资料，不是另一套 Skill 库。
 
 ## 当前范围与限制
 
 - Evaluator v1 只认可数据集标注的目标 ASIN，不推断等价替代商品；
 - 当前 Reward 只使用目标 ASIN 和必选规格；`required_attributes` 与价格事实已保留，
   但尚未进入 v1 评分公式；
-- Harness 尚未提供自动 Agent Rollout CLI、Web 服务或批量实验汇总器；
-- DeepSeek 客户端只是可选调用层，不会自动完成工具循环或解析推荐 Schema；
+- Agent Runner 当前是同步单任务循环，尚未提供 Rollout CLI、Web 服务、并发调度或
+  批量实验汇总器；
+- Runner 失败时保留 active Session 供审计，调用方需在确认后显式 force release；
 - 无法唯一解析的 Gold 规格会 Fail Closed，并返回 `reward_valid=false`。
 
 这些约束让当前评分保持简单、可复放和可审计，也明确了后续扩展替代商品、属性/预算
-评分和完整 Agent Runtime 时需要升级的协议边界。
+评分和批量 Agent Runtime 时需要升级的协议边界。
 
 ## 致谢
 

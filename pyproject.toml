@@ -26,3 +26,16 @@ include-package-data = false
 where = ["."]
 include = ["src", "src.*"]
 namespaces = true
+
+[tool.setuptools.data-files]
+"share/shopping-simulator-harness/skills/shopping-agent" = [
+    "skills/shopping-agent/SKILL.md",
+]
+"share/shopping-simulator-harness/skills/shopping-agent/agents" = [
+    "skills/shopping-agent/agents/openai.yaml",
+]
+"share/shopping-simulator-harness/skills/shopping-agent/references" = [
+    "skills/shopping-agent/references/agent-definition.md",
+    "skills/shopping-agent/references/shopping-strategy.md",
+    "skills/shopping-agent/references/tool-contract.md",
+]
