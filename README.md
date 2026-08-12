@@ -2,7 +2,7 @@
 
 <div align="center">
 
-面向中文购物推荐 Agent 的确定性检索、任务隔离与评测框架
+面向中文购物推荐 Agent 的确定性检索、隔离评测与可审计 Rollout 框架
 
 <br />
 
@@ -13,7 +13,7 @@
 
 <br />
 
-公开商品目录与私有答案隔离 → 多字段 BM25 检索 → 结构化推荐 → 可复放评分
+公开商品目录与私有答案隔离 → Agent 工具循环 → 结构化推荐 → 可复放评分
 
 </div>
 
@@ -27,6 +27,8 @@ Harness 不负责模型训练，并保持模型 Provider 中立。项目内置�
 `shopping-agent` Skill，用于定义 Agent 身份、购物策略和工具契约；`AgentRunner`
 加载该 Skill，驱动 Provider 调用 Harness 工具并在终局提交结构化推荐。整个加载、
 分析、工具执行和评估链路都位于本仓库，不依赖 Shopping GRPO 项目。
+`RolloutRunner` 和 `shopping-agent` CLI 进一步提供确定性任务采样、有界并发执行、
+持久化运行记录与聚合指标。
 
 ## 项目做了什么？
 
@@ -36,16 +38,20 @@ flowchart LR
     B --> C[公开字段投影]
     B --> D[私有任务事实]
     C --> E[SQLite FTS5 多字段 BM25 索引]
-    D --> F[公开任务 / 私有答案隔离]
-    F --> G[AgentRunner 创建 Session]
+    D --> F["TaskStore 公开任务 / 私有答案隔离"]
+    N["Python API / shopping-agent CLI"] --> O[RolloutRunner]
+    O --> G[AgentRunner]
     M[shopping-agent Skill] --> G
     G <--> I[模型 Provider]
-    G <--> H[Harness 搜索与商品详情]
+    F --> H["ShoppingHarness / Session"]
+    G <--> H
     E --> H
     G --> J[最多 5 个结构化推荐]
     J --> K[确定性 Evaluator v1]
     D --> K
     K --> L[Reward、终止原因与逐项审计结果]
+    L --> O
+    O --> P["runs.jsonl / summary.json"]
 ```
 
 | 模块 | 作用 | 入口 |
@@ -60,6 +66,8 @@ flowchart LR
 | 模型 Provider | 统一消息、工具调用、终止原因和 Token Usage | `ModelProvider` |
 | DeepSeek Provider | DeepSeek Chat Completions 请求、解析与有界重试 | `DeepSeekProvider` |
 | Agent Runner | 加载 Skill，驱动单工具循环并生成完整运行审计结果 | `AgentRunner` |
+| Rollout Runner | 采样或接收任务列表，并发运行并聚合质量、Token 与耗时指标 | `RolloutRunner` |
+| 命令行 | 执行单任务或批量 Rollout，写入不可覆盖的审计产物 | `shopping-agent` |
 
 ## 核心设计
 
@@ -153,7 +161,8 @@ Manifest 和诊断产物均为本地文件，不纳入 Git。
 - Python 3.10 或更高版本；
 - 支持 FTS5 的 SQLite（标准 Python 发行版通常已包含）；
 - 数百 MB 可用磁盘空间，用于压缩包、解压后的 JSON 和生成索引；
-- 运行核心 Harness 不需要 GPU。
+- 运行核心 Harness 不需要 GPU；
+- 仅在运行 DeepSeek Agent 时需要 API Key 和可访问 Provider 的网络。
 
 ## 快速开始
 
@@ -287,6 +296,75 @@ print(result.model_dump_json(indent=2))
 工具；文本代替提交、同轮多个工具、Provider 错误和模型轮次耗尽都会返回带完整消息、
 Token Usage 与 Session 快照的 `AgentRunResult`。
 
+## 命令行与批量 Rollout
+
+安装项目并设置 `DEEPSEEK_API_KEY` 后，可使用 `shopping-agent` 命令。
+默认数据路径是 `data/fine_items_eval_train_all.json`，索引路径是
+`data/product_search.sqlite3`。
+
+### 单任务
+
+运行一个显式任务并将完整 `AgentRunResult` 输出到标准输出：
+
+```bash
+shopping-agent run \
+  --task-id task_0123456789abcdef01234567 \
+  --model deepseek-v4-flash \
+  --max-steps 20
+```
+
+使用 `--output result.json` 可写入新文件；如果文件已存在，命令会拒绝覆盖。
+
+### 批量 Rollout
+
+从冻结 split 中按 Seed 确定性采样并批量运行：
+
+```bash
+shopping-agent rollout \
+  --split eval \
+  --count 100 \
+  --seed 42 \
+  --workers 4 \
+  --model deepseek-v4-flash \
+  --output-root outputs/rollouts
+```
+
+`--count` 在使用 `--split` 时是必填项，避免误运行整个数据集并产生意外 API 消耗。
+也可以多次传入 `--task-id` 来运行显式任务列表：
+
+```bash
+shopping-agent rollout \
+  --task-id task_0123456789abcdef01234567 \
+  --task-id task_89abcdef0123456789abcdef \
+  --workers 2
+```
+
+每项任务使用独立 Provider、AgentRunner 和 Session；共享的 Harness 继续负责
+只读目录、Session 隔离和确定性评估。`--workers` 可设为 1–64，输出记录
+始终按输入任务顺序排列，不受并发完成顺序影响。
+
+每次 rollout 创建不可覆盖的独立目录：
+
+```text
+outputs/rollouts/rollout_<UTC时间>_<随机后缀>/
+  runs.jsonl                       每项任务的完整 AgentRunResult 或异常记录
+  summary.json                     配置、任务顺序、质量与 Token 汇总
+```
+
+汇总包含完成率、严格成功率、Reward 覆盖率、全任务平均 Reward、有效 Reward 平均值、
+终止原因、模型轮次、工具调用数、Token Usage 和耗时。`average_reward` 以所有请求任务为
+分母，未得到有效 Reward 的任务按 0 计；`average_valid_reward` 只统计
+`reward_valid=true` 的任务。单项模型或运行错误不会中断其余任务。
+
+通用参数同时适用于 `run` 和 `rollout`：`--products-path`、`--index-path`、
+`--skill-dir`、`--model`、`--base-url`、`--temperature`、`--max-steps`、
+`--max-model-turns`、`--timeout`、`--max-retries`、`--retry-backoff` 和
+`--provider-parameters JSON`。额外 Provider 参数会写入 Rollout 元数据，其中名称包含
+key、token、password、secret 或 authorization 的顶层字段会被遮盖。
+
+Seed 保证任务采样和结果排列可复现；Harness 检索和 Evaluator 也是确定性的。
+但远程模型输出是否完全复现仍取决于 Provider 服务、模型版本与请求参数。
+
 ## 运行测试
 
 ```bash
@@ -295,8 +373,9 @@ python -m unittest discover -s src/harness/test -p "*.py" -v
 
 当前测试覆盖公开字段防泄漏、BM25 顺序、索引与 Manifest 校验、任务规格归一化、
 Evaluator 各终局分支、Agent 完整工具循环与失败边界，以及 Provider 消息契约、
-DeepSeek 工具调用解析、Token Usage、重试和错误处理。未解析规格扫描脚本是数据诊断
-工具，不会调用外部 API。
+DeepSeek 工具调用解析、Token Usage、重试和错误处理，以及 Rollout 采样、
+并发顺序、指标聚合、原子化产物写入和 CLI 参数校验。未解析规格扫描脚本是
+数据诊断工具，不会调用外部 API。
 
 ## 仓库结构
 
@@ -317,7 +396,8 @@ src/harness/
   evaluator.py                    确定性推荐评分
   session.py                      单任务工具状态机与公开轨迹
   harness.py                      多 Session 生命周期与统一分发入口
-  agent/                          Skill 加载、工具定义与 AgentRunner 循环
+  agent/                          Skill、AgentRunner 与批量 Rollout Runner
+  cli.py                          shopping-agent run/rollout 命令行入口
   providers/base.py               Provider 协议、消息、工具调用和 Usage Schema
   providers/deepseek.py           DeepSeek Chat Completions Provider
   api/                            旧 DeepSeek 客户端导入兼容层
@@ -334,8 +414,7 @@ skills/
 - Evaluator v1 只认可数据集标注的目标 ASIN，不推断等价替代商品；
 - 当前 Reward 只使用目标 ASIN 和必选规格；`required_attributes` 与价格事实已保留，
   但尚未进入 v1 评分公式；
-- Agent Runner 当前是同步单任务循环，尚未提供 Rollout CLI、Web 服务、并发调度或
-  批量实验汇总器；
+- 当前提供线程级批量 Rollout，但尚未提供跨机器调度、断点续跑或 Web 服务；
 - Runner 失败时保留 active Session 供审计，调用方需在确认后显式 force release；
 - 无法唯一解析的 Gold 规格会 Fail Closed，并返回 `reward_valid=false`。
 

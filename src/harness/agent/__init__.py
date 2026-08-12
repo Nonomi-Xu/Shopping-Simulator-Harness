@@ -8,6 +8,16 @@ from .runner import (
     RunStatus,
     RunTerminalReason,
 )
+from .rollout import (
+    ROLLOUT_RUNNER_VERSION,
+    RolloutError,
+    RolloutHarness,
+    RolloutReport,
+    RolloutRunner,
+    RolloutSummary,
+    RolloutTaskRecord,
+    TaskRunner,
+)
 from .skill import (
     AgentSkill,
     AgentSkillError,
@@ -25,6 +35,14 @@ __all__ = [
     "HarnessRuntime",
     "RunStatus",
     "RunTerminalReason",
+    "ROLLOUT_RUNNER_VERSION",
+    "RolloutError",
+    "RolloutHarness",
+    "RolloutReport",
+    "RolloutRunner",
+    "RolloutSummary",
+    "RolloutTaskRecord",
+    "TaskRunner",
     "default_shopping_skill_dir",
     "load_agent_skill",
     "shopping_tool_definitions",

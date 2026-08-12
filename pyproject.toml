@@ -18,6 +18,7 @@ dev = [
 
 [project.scripts]
 shopping-harness-prepare = "src.data.pipeline:main"
+shopping-agent = "src.harness.cli:entrypoint"
 
 [tool.setuptools]
 include-package-data = false
