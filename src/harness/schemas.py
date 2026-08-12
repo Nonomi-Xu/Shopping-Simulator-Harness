@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +12,13 @@ EvaluationTerminalReason = Literal[
     "no_match",
     "invalid_submission",
     "unverifiable_task",
+]
+SessionStatus = Literal["active", "terminated"]
+SessionStepStatus = Literal["success", "rejected", "error"]
+SessionTerminalReason = Literal[
+    "submitted",
+    "max_steps",
+    "infrastructure_error",
 ]
 
 
@@ -82,21 +89,41 @@ class PrivateTaskFacts(BaseModel):
 
 
 class SearchProductsAction(BaseModel):
-    query: str
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+    )
+
+    query: str = Field(min_length=1)
     limit: int = Field(default=20, ge=1, le=50)
 
 
 class GetProductAction(BaseModel):
-    asin: str
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+    )
+
+    asin: str = Field(min_length=1)
 
 
 class RecommendationItem(BaseModel):
-    asin: str
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+    )
+
+    asin: str = Field(min_length=1)
     selected_options: dict[str, str]
-    reason: str
+    reason: str = Field(min_length=1)
 
 
 class SubmitRecommendationsAction(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     recommendations: list[RecommendationItem]
 
 
@@ -131,3 +158,47 @@ class EvaluationResult(BaseModel):
     recommendations: list[RecommendationEvaluation] = Field(
         default_factory=list
     )
+
+
+class SessionState(BaseModel):
+    """Public lifecycle state for one isolated task session."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_version: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    task_id: str = Field(pattern=r"^task_[0-9a-f]{24}$")
+    status: SessionStatus
+    step_count: int = Field(ge=0)
+    max_steps: int = Field(ge=1)
+    surfaced_asins: list[str] = Field(default_factory=list)
+    inspected_asins: list[str] = Field(default_factory=list)
+    terminal_reason: SessionTerminalReason | None = None
+
+
+class SessionStep(BaseModel):
+    """One actor-visible tool attempt and its public observation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_id: str = Field(pattern=r"^step_[0-9]{4}$")
+    step_number: int = Field(ge=1)
+    tool_name: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    status: SessionStepStatus
+    observation: dict[str, Any] | list[dict[str, Any]] | None = None
+    error_code: str | None = None
+    message: str | None = None
+    terminated: bool
+    terminal_reason: SessionTerminalReason | None = None
+
+
+class SessionSnapshot(BaseModel):
+    """Serializable public view of one managed Harness session."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    public_task: PublicTask
+    state: SessionState
+    history: list[SessionStep] = Field(default_factory=list)
+    evaluation: EvaluationResult | None = None

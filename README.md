@@ -51,6 +51,8 @@ flowchart LR
 | 商品目录 | 搜索公开商品摘要，按 ASIN 获取公开详情 | `ProductCatalog` |
 | 任务仓库 | 生成不包含答案的稳定任务 ID，隔离公开 Query 与私有 Gold Facts | `TaskStore` |
 | 确定性评分 | 校验提交格式、商品、规格与目标匹配情况 | `evaluate_submission` |
+| 单任务 Session | 守卫搜索、详情访问与终局提交，记录有界可回放轨迹 | `ShoppingSession` |
+| Harness 管理层 | 校验数据契约，创建、分发、查询和释放多个隔离 Session | `ShoppingHarness` |
 | DeepSeek 客户端 | 可选的同步 Chat Completions 调用封装 | `DeepSeekClient` |
 
 ## 核心设计
@@ -193,49 +195,49 @@ data/product_search.manifest.json
 ### 3. 运行一次完整评测
 
 下面的示例演示公共 Actor 边界和私有 Evaluator 边界。真实 Agent 应根据 `task.query`
-调用 `catalog.search()`、读取候选详情，再构造提交；示例中的 ASIN 和规格仅表示 Agent
-最终决策。
+通过 `harness.dispatch()` 搜索、读取候选详情，再构造提交；示例中的 ASIN 和规格
+仅表示 Agent 最终决策。
 
 ```python
 from pathlib import Path
 
-from src.harness.catalog import ProductCatalog
-from src.harness.evaluator import evaluate_submission
-from src.harness.schemas import RecommendationItem, SubmitRecommendationsAction
-from src.harness.tasks import TaskStore
+from src.harness.harness import ShoppingHarness
 
 data_dir = Path("data")
-products_path = data_dir / "fine_items_eval_train_all.json"
-index_path = data_dir / "product_search.sqlite3"
+with ShoppingHarness(
+    products_path=data_dir / "fine_items_eval_train_all.json",
+    index_path=data_dir / "product_search.sqlite3",
+) as harness:
+    task_id = harness.sample_task_ids("eval", 1, seed=42)[0]
+    started = harness.create_session(task_id)
+    session_id = started.state.session_id
 
-tasks = TaskStore(products_path)
-task_id = tasks.sample_task_ids("eval", 1, seed=42)[0]
-
-# Actor 边界：只向模型提供公开 Query 和公开目录。
-task = tasks.get_public_task(task_id)
-with ProductCatalog(
-    index_path,
-    expected_product_sha256=tasks.product_data_sha256,
-) as catalog:
-    candidates = catalog.search(task.query, limit=20)
-    detail = catalog.get_product(candidates[0].asin)
-
-    submission = SubmitRecommendationsAction(
-        recommendations=[
-            RecommendationItem(
-                asin=detail.asin,
-                selected_options={},
-                reason="根据需求、属性和价格筛选出的候选商品",
-            )
-        ]
+    # Actor 只能看到 PublicTask 和各步公开 observation。
+    search_step = harness.dispatch(
+        session_id,
+        "search_products",
+        {"query": started.public_task.query, "limit": 20},
     )
-
-    # Evaluator 边界：私有事实只能在模型提交完成后使用。
-    result = evaluate_submission(
-        facts=tasks.get_private_facts(task_id),
-        submission=submission,
-        catalog=catalog,
+    candidate = search_step.observation[0]
+    harness.dispatch(
+        session_id,
+        "get_product",
+        {"asin": candidate["asin"]},
     )
+    harness.dispatch(
+        session_id,
+        "submit_recommendations",
+        {
+            "recommendations": [
+                {
+                    "asin": candidate["asin"],
+                    "selected_options": {},
+                    "reason": "根据需求、属性和价格筛选出的候选商品",
+                }
+            ]
+        },
+    )
+    result = harness.get_evaluation(session_id)
 
 print(result.model_dump_json(indent=2))
 ```
@@ -292,6 +294,8 @@ src/harness/
   catalog.py                      只读公开商品目录
   tasks.py                        公开任务与私有 Gold Facts 隔离
   evaluator.py                    确定性推荐评分
+  session.py                      单任务工具状态机与公开轨迹
+  harness.py                      多 Session 生命周期与统一分发入口
   api/deepseek.py                 可选 DeepSeek Chat Completions 客户端
   test/                           契约测试与数据诊断工具
 ```
@@ -301,7 +305,7 @@ src/harness/
 - Evaluator v1 只认可数据集标注的目标 ASIN，不推断等价替代商品；
 - 当前 Reward 只使用目标 ASIN 和必选规格；`required_attributes` 与价格事实已保留，
   但尚未进入 v1 评分公式；
-- Harness 尚未提供统一的 Agent Rollout CLI、Web 服务或批量实验汇总器；
+- Harness 尚未提供自动 Agent Rollout CLI、Web 服务或批量实验汇总器；
 - DeepSeek 客户端只是可选调用层，不会自动完成工具循环或解析推荐 Schema；
 - 无法唯一解析的 Gold 规格会 Fail Closed，并返回 `reward_valid=false`。
 
