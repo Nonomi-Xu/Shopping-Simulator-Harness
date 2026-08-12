@@ -1,6 +1,7 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+.env
 
 # Local datasets, generated indexes, manifests, and previews.
 /data/

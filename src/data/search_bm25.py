@@ -8,8 +8,8 @@ from pathlib import Path
 import platform
 import re
 import sqlite3
-import unicodedata
 
+from .NFKC import normalize_query
 from .product_projection import project_public_product
 
 SEARCH_VERSION = "shopsimulator-multifield-bm25-v2"
@@ -40,17 +40,6 @@ class SearchHit:
     asin: str
     score: float
     rank: int
-
-def normalize_query(value: object) -> str:
-    '''
-    标准化搜索词，包括字符、大小写、货币单位、标点和空格。
-    '''
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = text.replace("人民币", "元").replace("块钱", "元")
-    text = re.sub(r"(?<=\d)\s*(?:rmb|cny|yuan)\b", "元", text)
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"[，,。；;：:！!？?、|]+", " ", text)
-    return " ".join(text.split())
 
 def search_tokens(value: object) -> tuple[str, ...]:
     """返回稳定、有序的搜索词元，包括中文二元组。"""

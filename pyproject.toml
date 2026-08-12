@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shopping-simulator-harness"
+version = "0.1.0"
+description = "Deterministic recommendation harness for Shopping Simulator"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "duckdb>=1.0,<2",
+]
+
+[project.scripts]
+shopping-harness-prepare = "src.data.pipeline:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src", "src.*"]
+namespaces = true

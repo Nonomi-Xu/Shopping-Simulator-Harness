@@ -1,0 +1,315 @@
+# Shopping Simulator Harness
+
+<div align="center">
+
+面向中文购物推荐 Agent 的确定性检索、任务隔离与评测框架
+
+<br />
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Pydantic](https://img.shields.io/badge/Pydantic-2.x-E92063?logo=pydantic&logoColor=white)](pyproject.toml)
+[![Search](https://img.shields.io/badge/Search-SQLite%20FTS5%20BM25-0F80CC)](src/data/search_bm25.py)
+[![Evaluator](https://img.shields.io/badge/Evaluator-Deterministic-0E8A16)](src/harness/evaluator.py)
+
+<br />
+
+公开商品目录与私有答案隔离 → 多字段 BM25 检索 → 结构化推荐 → 可复放评分
+
+</div>
+
+## Harness 是什么？
+
+Shopping Simulator Harness 是一个轻量、可审计的购物推荐评测核心。它把原始商品与
+任务数据转换为只读商品目录和确定性搜索索引，为 Agent 提供公开任务与商品信息，并在
+终局使用私有标注检查推荐结果。
+
+Harness 不负责模型训练，也不内置某一种 Agent 实现。模型可以使用任意推理框架，只要
+最终提交结构化的商品 ASIN、所选规格和推荐理由，就可以接入同一套确定性评测协议。
+
+## 项目做了什么？
+
+```mermaid
+flowchart LR
+    A[商品数据压缩包] --> B[解压与数据校验]
+    B --> C[公开字段投影]
+    B --> D[私有任务事实]
+    C --> E[SQLite FTS5 多字段 BM25 索引]
+    D --> F[公开任务 / 私有答案隔离]
+    F --> G[Agent 读取 Query]
+    E --> H[搜索与商品详情]
+    G --> I[Agent]
+    H --> I
+    I --> J[最多 5 个结构化推荐]
+    J --> K[确定性 Evaluator v1]
+    D --> K
+    K --> L[Reward、终止原因与逐项审计结果]
+```
+
+| 模块 | 作用 | 入口 |
+|---|---|---|
+| 数据准备 | 解压数据、校验 ASIN 与 split、原子化构建索引 | `shopping-harness-prepare` |
+| 商品目录 | 搜索公开商品摘要，按 ASIN 获取公开详情 | `ProductCatalog` |
+| 任务仓库 | 生成不包含答案的稳定任务 ID，隔离公开 Query 与私有 Gold Facts | `TaskStore` |
+| 确定性评分 | 校验提交格式、商品、规格与目标匹配情况 | `evaluate_submission` |
+| DeepSeek 客户端 | 可选的同步 Chat Completions 调用封装 | `DeepSeekClient` |
+
+## 核心设计
+
+### 公开商品目录
+
+索引构建时只把白名单字段写入 `product_catalog`：
+
+- ASIN、标题、品牌和类别；
+- 价格范围与原始价格列表；
+- 商品描述与属性；
+- 可选规格、规格组合及可用状态；
+- 商品图片。
+
+任务指令、用户画像、Worker 信息和其他私有标注不会进入公开商品对象。运行时数据库以
+只读模式打开；索引 schema、公开投影版本、源数据 SHA-256、Python 与 SQLite 版本都
+记录在 Manifest 中，版本不兼容或哈希不一致时直接失败。
+
+### 多字段 BM25 检索
+
+检索使用 SQLite FTS5，对文本进行 NFKC 与大小写归一化，并组合中文二元词、英文、
+数字和商品型号。当前字段权重为：
+
+| 字段 | 权重 |
+|---|---:|
+| 标题 `title` | 3.0 |
+| 型号 `model` | 2.5 |
+| 品牌 `brand` | 2.0 |
+| 类别 `category` | 2.0 |
+| 属性 `attributes` | 1.5 |
+| 规格 `options` | 1.2 |
+| 卖点 `bullets` | 0.8 |
+
+结果先按 BM25 分数排序，同分时按 ASIN 升序，单次最多返回 50 个商品。
+
+### 公开任务与私有答案隔离
+
+Actor 只能读取：
+
+```json
+{
+  "task_id": "task_0123456789abcdef01234567",
+  "query": "用户的购物需求"
+}
+```
+
+Evaluator 独立读取目标 ASIN、目标类别、目标规格、属性、价格和数据来源位置。
+`task_id` 由源数据行号、指令序号和 Query 生成稳定的截断 SHA-256，但不会直接暴露
+目标商品 ASIN。训练集与评测集按源数据的 `tag` 字段冻结，并支持带 Seed 的确定性
+采样。
+
+规格标注优先按原文精确匹配，再按共享的 NFKC、大小写与字母数字归一化规则匹配。
+不能唯一映射到商品规格轴的标注会被保留为 `unresolved_option_values`，不会被静默
+猜测。
+
+### Evaluator v1
+
+Evaluator 不调用 LLM，只根据私有任务事实和公开商品目录评分：
+
+| 结果 | Reward | `reward_valid` | 条件 |
+|---|---:|---:|---|
+| `strict_success` | 1.0 | `true` | 命中目标 ASIN，所需规格完全正确，且提交合法 |
+| `partial_match` | 0.25 | `true` | 推荐中包含目标 ASIN，但缺少或选错所需规格 |
+| `no_match` | 0.0 | `true` | 提交合法，但没有命中目标 ASIN |
+| `invalid_submission` | 0.0 | `false` | 空提交、超过 5 项、重复/未知 ASIN、空理由或非法/不可用规格 |
+| `unverifiable_task` | 0.0 | `false` | Gold 规格标注无法唯一映射，因而不能可靠评分 |
+
+结果同时包含目标商品出现的排名、提交级错误，以及每条推荐的商品存在性、ASIN 匹配、
+规格合法性和严格匹配状态，便于离线复放与问题定位。
+
+## 数据概览
+
+当前本地数据集统计如下：
+
+| Split | 商品数 | 任务数 | 含未解析规格的任务 |
+|---|---:|---:|---:|
+| Train | 21,962 | 21,962 | 26 |
+| Eval | 1,459 | 1,459 | 6 |
+| 合计 | 23,421 | 23,421 | 32 |
+
+32 个任务共包含 33 个无法唯一解析的规格值。可以重新生成详细诊断报告：
+
+```bash
+python src/harness/test/test_tasks_unsolved.py
+```
+
+默认输出到 `data/test/tasks_unresolved.json`。`data/` 下的原始数据、解压结果、索引、
+Manifest 和诊断产物均为本地文件，不纳入 Git。
+
+## 环境要求
+
+- Python 3.10 或更高版本；
+- 支持 FTS5 的 SQLite（标准 Python 发行版通常已包含）；
+- 数百 MB 可用磁盘空间，用于压缩包、解压后的 JSON 和生成索引；
+- 运行核心 Harness 不需要 GPU。
+
+## 快速开始
+
+以下命令均在仓库根目录执行。
+
+### 1. 创建环境并安装
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+核心依赖只有 Pydantic 2；`dev` 额外安装用于本地数据预览的 DuckDB。
+
+### 2. 准备数据
+
+将数据压缩包放在：
+
+```text
+data/fine_items_eval_train_all.json.gz
+```
+
+然后执行：
+
+```bash
+shopping-harness-prepare
+```
+
+脚本会依次完成解压、数据校验、公开字段投影和 SQLite 索引构建，并输出可审计的
+Manifest。若要重新解压并强制重建索引：
+
+```bash
+shopping-harness-prepare --force
+```
+
+生成的主要文件为：
+
+```text
+data/fine_items_eval_train_all.json
+data/product_search.sqlite3
+data/product_search.manifest.json
+```
+
+### 3. 运行一次完整评测
+
+下面的示例演示公共 Actor 边界和私有 Evaluator 边界。真实 Agent 应根据 `task.query`
+调用 `catalog.search()`、读取候选详情，再构造提交；示例中的 ASIN 和规格仅表示 Agent
+最终决策。
+
+```python
+from pathlib import Path
+
+from src.harness.catalog import ProductCatalog
+from src.harness.evaluator import evaluate_submission
+from src.harness.schemas import RecommendationItem, SubmitRecommendationsAction
+from src.harness.tasks import TaskStore
+
+data_dir = Path("data")
+products_path = data_dir / "fine_items_eval_train_all.json"
+index_path = data_dir / "product_search.sqlite3"
+
+tasks = TaskStore(products_path)
+task_id = tasks.sample_task_ids("eval", 1, seed=42)[0]
+
+# Actor 边界：只向模型提供公开 Query 和公开目录。
+task = tasks.get_public_task(task_id)
+with ProductCatalog(
+    index_path,
+    expected_product_sha256=tasks.product_data_sha256,
+) as catalog:
+    candidates = catalog.search(task.query, limit=20)
+    detail = catalog.get_product(candidates[0].asin)
+
+    submission = SubmitRecommendationsAction(
+        recommendations=[
+            RecommendationItem(
+                asin=detail.asin,
+                selected_options={},
+                reason="根据需求、属性和价格筛选出的候选商品",
+            )
+        ]
+    )
+
+    # Evaluator 边界：私有事实只能在模型提交完成后使用。
+    result = evaluate_submission(
+        facts=tasks.get_private_facts(task_id),
+        submission=submission,
+        catalog=catalog,
+    )
+
+print(result.model_dump_json(indent=2))
+```
+
+## 使用 DeepSeek（可选）
+
+仓库提供一个不依赖第三方 HTTP SDK 的同步客户端，可用于外部 Agent 或实验代码。它与
+确定性 Evaluator 相互独立，不会参与 Reward 计算。
+
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+```
+
+```python
+from src.harness.api.deepseek import call_deepseek
+
+answer = call_deepseek(
+    "请根据候选商品生成结构化推荐。",
+    system_prompt="你是一个中文购物推荐 Agent。",
+    temperature=0,
+)
+print(answer)
+```
+
+默认 Base URL 为 `https://api.deepseek.com`，默认模型名为
+`deepseek-v4-flash`。也可以在 `DeepSeekClient` 或 `call_deepseek` 中显式传入
+`api_key`、`base_url`、`model` 和 `timeout`。客户端只支持非流式 Chat
+Completions。
+
+## 运行测试
+
+```bash
+python -m unittest discover -s src/harness/test -p "*.py" -v
+```
+
+当前测试覆盖公开字段防泄漏、BM25 顺序、索引与 Manifest 校验、任务规格归一化、
+Evaluator 各终局分支，以及 DeepSeek 请求构造和错误处理。未解析规格扫描脚本是数据
+诊断工具，不会调用外部 API。
+
+## 仓库结构
+
+```text
+pyproject.toml                    包元数据、依赖与命令行入口
+data/                             本地数据、索引、Manifest 与诊断结果
+src/data/
+  decompress.py                   Gzip 解压
+  validate.py                     数据集完整性与 split 校验
+  product_projection.py           原始商品到公开白名单字段的投影
+  search_bm25.py                  分词、多字段 BM25、目录和 Manifest
+  build_index.py                  流式读取 JSON 并构建索引
+  pipeline.py                     一键数据准备入口
+src/harness/
+  schemas.py                      Pydantic 输入、输出与评测 Schema
+  catalog.py                      只读公开商品目录
+  tasks.py                        公开任务与私有 Gold Facts 隔离
+  evaluator.py                    确定性推荐评分
+  api/deepseek.py                 可选 DeepSeek Chat Completions 客户端
+  test/                           契约测试与数据诊断工具
+```
+
+## 当前范围与限制
+
+- Evaluator v1 只认可数据集标注的目标 ASIN，不推断等价替代商品；
+- 当前 Reward 只使用目标 ASIN 和必选规格；`required_attributes` 与价格事实已保留，
+  但尚未进入 v1 评分公式；
+- Harness 尚未提供统一的 Agent Rollout CLI、Web 服务或批量实验汇总器；
+- DeepSeek 客户端只是可选调用层，不会自动完成工具循环或解析推荐 Schema；
+- 无法唯一解析的 Gold 规格会 Fail Closed，并返回 `reward_valid=false`。
+
+这些约束让当前评分保持简单、可复放和可审计，也明确了后续扩展替代商品、属性/预算
+评分和完整 Agent Runtime 时需要升级的协议边界。
+
+## 致谢
+
+项目的数据与任务形态来自
+[ShopSimulator](https://arxiv.org/pdf/2601.18225)，README 的组织方式参考同工作区的
+Shopping GRPO 项目。
