@@ -51,7 +51,7 @@ flowchart LR
     D --> K
     K --> L[Reward、终止原因与逐项审计结果]
     L --> O
-    O --> P["runs.jsonl / summary.json"]
+    O --> P["runs.jsonl / consumption.jsonl / summary.json"]
 ```
 
 | 模块 | 作用 | 入口 |
@@ -263,17 +263,25 @@ print(result.model_dump_json(indent=2))
 `ModelProvider` 协议：它会加载完整 `shopping-agent` Skill，根据 Action Schema 暴露
 三个工具，逐轮执行一个工具调用并回灌公开 observation，直到提交或明确失败。
 
-```bash
-export DEEPSEEK_API_KEY="your-api-key"
+```dotenv
+# .env 或 src/.env
+DEEPSEEK_API_KEY=your-api-key
 ```
+
+CLI 会按顺序查找当前目录的 `.env`、当前目录的 `src/.env`、仓库根目录的
+`.env` 和 `src/.env`，并兼容已有的 `DEEPSEEK_API` 变量名。进程环境变量
+优先，不会被 `.env` 覆盖。也可使用 `--env-file PATH` 指定文件，或用
+`--no-env-file` 禁止自动加载。不支持变量插值，文件解析错误会直接终止命令。
 
 ```python
 from pathlib import Path
 
 from src.harness.agent import AgentRunner
+from src.harness.env import load_dotenv
 from src.harness.harness import ShoppingHarness
 from src.harness.providers import DeepSeekProvider
 
+load_dotenv()  # Python API 需要显式加载 .env；CLI 会自动加载。
 provider = DeepSeekProvider(
     model="deepseek-v4-flash",
     default_parameters={"temperature": 0},
@@ -292,13 +300,15 @@ print(result.model_dump_json(indent=2))
 默认 Base URL 为 `https://api.deepseek.com`，默认模型名为
 `deepseek-v4-flash`。可以显式传入 `api_key`、`base_url`、`model`、`timeout`、
 `max_retries` 和默认推理参数。Provider 只支持非流式 Chat Completions；旧的
-`DeepSeekClient` 和 `call_deepseek` 导入仍作为兼容层保留。Runner 默认要求模型调用
-工具；文本代替提交、同轮多个工具、Provider 错误和模型轮次耗尽都会返回带完整消息、
+`DeepSeekClient` 和 `call_deepseek` 导入仍作为兼容层保留。`AgentRunner` 的库级默认
+`tool_choice="required"`；文本代替提交、同轮多个工具、Provider 错误和模型轮次耗尽
+都会返回带完整消息、
 Token Usage 与 Session 快照的 `AgentRunResult`。
 
 ## 命令行与批量 Rollout
 
-安装项目并设置 `DEEPSEEK_API_KEY` 后，可使用 `shopping-agent` 命令。
+安装项目并在进程环境或 `.env` 中设置 `DEEPSEEK_API_KEY` / `DEEPSEEK_API` 后，
+可使用 `shopping-agent` 命令。
 默认数据路径是 `data/fine_items_eval_train_all.json`，索引路径是
 `data/product_search.sqlite3`。
 
@@ -343,11 +353,15 @@ shopping-agent rollout \
 只读目录、Session 隔离和确定性评估。`--workers` 可设为 1–64，输出记录
 始终按输入任务顺序排列，不受并发完成顺序影响。
 
+CLI 默认使用 `--tool-choice auto` 以兼容 DeepSeek thinking 模式。Runner 仍要求任务
+最终通过 `submit_recommendations` 完成，不接受普通文本替代结构化提交。
+
 每次 rollout 创建不可覆盖的独立目录：
 
 ```text
 outputs/rollouts/rollout_<UTC时间>_<随机后缀>/
   runs.jsonl                       每项任务的完整 AgentRunResult 或异常记录
+  consumption.jsonl                每项任务的耗时、轮次、工具数和 Token 消耗
   summary.json                     配置、任务顺序、质量与 Token 汇总
 ```
 
@@ -356,8 +370,14 @@ outputs/rollouts/rollout_<UTC时间>_<随机后缀>/
 分母，未得到有效 Reward 的任务按 0 计；`average_valid_reward` 只统计
 `reward_valid=true` 的任务。单项模型或运行错误不会中断其余任务。
 
-通用参数同时适用于 `run` 和 `rollout`：`--products-path`、`--index-path`、
-`--skill-dir`、`--model`、`--base-url`、`--temperature`、`--max-steps`、
+`runs.jsonl` 的每条记录都带有 `consumption`，其中包含该任务的 wall time、模型轮次、
+Harness 工具调用数，以及输入、输出、缓存、缓存未命中、推理和总 Token。相同的精简
+记录会单独写入 `consumption.jsonl`，便于直接加载统计；Provider 价格可能变化，因此
+框架记录原始 Token，不自动换算金额。
+
+通用参数同时适用于 `run` 和 `rollout`：`--env-file` / `--no-env-file`、
+`--products-path`、`--index-path`、`--skill-dir`、`--provider`、`--model`、
+`--tool-choice`、`--base-url`、`--temperature`、`--max-steps`、
 `--max-model-turns`、`--timeout`、`--max-retries`、`--retry-backoff` 和
 `--provider-parameters JSON`。额外 Provider 参数会写入 Rollout 元数据，其中名称包含
 key、token、password、secret 或 authorization 的顶层字段会被遮盖。
@@ -373,8 +393,9 @@ python -m unittest discover -s src/harness/test -p "*.py" -v
 
 当前测试覆盖公开字段防泄漏、BM25 顺序、索引与 Manifest 校验、任务规格归一化、
 Evaluator 各终局分支、Agent 完整工具循环与失败边界，以及 Provider 消息契约、
-DeepSeek 工具调用解析、Token Usage、重试和错误处理，以及 Rollout 采样、
-并发顺序、指标聚合、原子化产物写入和 CLI 参数校验。未解析规格扫描脚本是
+DeepSeek 工具调用解析、Token Usage、重试和错误处理，以及 `.env` 加载、
+Rollout 采样、并发顺序、逐任务消耗、指标聚合、原子化产物写入和 CLI 参数校验。
+未解析规格扫描脚本是
 数据诊断工具，不会调用外部 API。
 
 ## 仓库结构
@@ -394,6 +415,7 @@ src/harness/
   catalog.py                      只读公开商品目录
   tasks.py                        公开任务与私有 Gold Facts 隔离
   evaluator.py                    确定性推荐评分
+  env.py                          不覆盖进程变量的轻量 .env 加载器
   session.py                      单任务工具状态机与公开轨迹
   harness.py                      多 Session 生命周期与统一分发入口
   agent/                          Skill、AgentRunner 与批量 Rollout Runner

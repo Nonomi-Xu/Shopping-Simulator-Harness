@@ -16,6 +16,7 @@ from .rollout import (
     RolloutRunner,
     RolloutSummary,
     RolloutTaskRecord,
+    RunConsumption,
     TaskRunner,
 )
 from .skill import (
@@ -42,6 +43,7 @@ __all__ = [
     "RolloutRunner",
     "RolloutSummary",
     "RolloutTaskRecord",
+    "RunConsumption",
     "TaskRunner",
     "default_shopping_skill_dir",
     "load_agent_skill",

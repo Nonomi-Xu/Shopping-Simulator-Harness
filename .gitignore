@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 .env
+*.egg-info/
+/build/
+/dist/
+/outputs/
 
 # Local datasets, generated indexes, manifests, and previews.
 /data/

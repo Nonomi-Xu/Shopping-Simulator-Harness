@@ -22,7 +22,7 @@ from ..schemas import SessionSnapshot, TaskSplit
 from .runner import AgentRunResult
 
 
-ROLLOUT_RUNNER_VERSION = "shopping-rollout-runner-v1"
+ROLLOUT_RUNNER_VERSION = "shopping-rollout-runner-v2"
 _ROLLOUT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _TASK_ID_PATTERN = re.compile(r"^task_[0-9a-f]{24}$")
 
@@ -64,6 +64,17 @@ class TaskRunner(Protocol):
     ) -> AgentRunResult: ...
 
 
+class RunConsumption(BaseModel):
+    """Explicit resource accounting for one task run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    duration_seconds: float = Field(ge=0.0)
+    model_turn_count: int = Field(ge=0)
+    tool_call_count: int = Field(ge=0)
+    usage: TokenUsage | None = None
+
+
 class RolloutTaskRecord(BaseModel):
     """One task outcome, including unexpected pre-result failures."""
 
@@ -73,6 +84,7 @@ class RolloutTaskRecord(BaseModel):
     task_id: str = Field(pattern=r"^task_[0-9a-f]{24}$")
     session_id: str = Field(min_length=1)
     duration_seconds: float = Field(ge=0.0)
+    consumption: RunConsumption
     result: AgentRunResult | None = None
     error_type: str | None = None
     error_message: str | None = None
@@ -84,6 +96,23 @@ class RolloutTaskRecord(BaseModel):
                 raise ValueError("failed task records require error details")
         elif self.error_type is not None or self.error_message is not None:
             raise ValueError("successful task records cannot include batch errors")
+        if self.consumption.duration_seconds != self.duration_seconds:
+            raise ValueError("consumption duration must match record duration")
+        if self.result is None:
+            if (
+                self.consumption.model_turn_count
+                or self.consumption.tool_call_count
+            ):
+                raise ValueError("pre-result failures cannot report Agent activity")
+            if self.consumption.usage is not None:
+                raise ValueError("pre-result failures cannot report token usage")
+        else:
+            if self.consumption.model_turn_count != self.result.model_turn_count:
+                raise ValueError("consumption model turns must match result")
+            if self.consumption.tool_call_count != self.result.tool_call_count:
+                raise ValueError("consumption tool calls must match result")
+            if self.consumption.usage != self.result.usage:
+                raise ValueError("consumption token usage must match result")
         return self
 
 
@@ -276,19 +305,32 @@ class RolloutRunner:
                 raise RolloutError(
                     "TaskRunner returned a result for a different task or session"
                 )
+            duration_seconds = time.perf_counter() - started
             return RolloutTaskRecord(
                 index=index,
                 task_id=task_id,
                 session_id=session_id,
-                duration_seconds=time.perf_counter() - started,
+                duration_seconds=duration_seconds,
+                consumption=RunConsumption(
+                    duration_seconds=duration_seconds,
+                    model_turn_count=result.model_turn_count,
+                    tool_call_count=result.tool_call_count,
+                    usage=result.usage,
+                ),
                 result=result,
             )
         except Exception as exc:
+            duration_seconds = time.perf_counter() - started
             return RolloutTaskRecord(
                 index=index,
                 task_id=task_id,
                 session_id=session_id,
-                duration_seconds=time.perf_counter() - started,
+                duration_seconds=duration_seconds,
+                consumption=RunConsumption(
+                    duration_seconds=duration_seconds,
+                    model_turn_count=0,
+                    tool_call_count=0,
+                ),
                 error_type=type(exc).__name__,
                 error_message=str(exc) or type(exc).__name__,
             )
@@ -461,7 +503,32 @@ def _persist_report(report: RolloutReport, output_dir: Path) -> None:
         mode="json",
         exclude={"records"},
     )
+    consumption_text = "".join(
+        json.dumps(
+            {
+                "index": record.index,
+                "task_id": record.task_id,
+                "session_id": record.session_id,
+                "status": (
+                    record.result.status
+                    if record.result is not None
+                    else "unexpected_error"
+                ),
+                "terminal_reason": (
+                    record.result.terminal_reason
+                    if record.result is not None
+                    else "unexpected_error"
+                ),
+                "consumption": record.consumption.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+        for record in report.records
+    )
     _atomic_write(output_dir / "runs.jsonl", records_text)
+    _atomic_write(output_dir / "consumption.jsonl", consumption_text)
     _atomic_write(
         output_dir / "summary.json",
         json.dumps(summary_payload, ensure_ascii=False, indent=2) + "\n",

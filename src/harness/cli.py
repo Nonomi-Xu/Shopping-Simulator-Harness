@@ -18,6 +18,7 @@ from .agent import (
     load_agent_skill,
 )
 from .catalog import CatalogError
+from .env import DotEnvError, load_dotenv
 from .harness import HarnessError, ShoppingHarness
 from .providers import (
     DEFAULT_BASE_URL,
@@ -106,6 +107,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    environment = parser.add_mutually_exclusive_group()
+    environment.add_argument(
+        "--env-file",
+        type=Path,
+        help="Load missing variables from this dotenv file.",
+    )
+    environment.add_argument(
+        "--no-env-file",
+        action="store_true",
+        help="Disable automatic .env discovery.",
+    )
     parser.add_argument(
         "--products-path",
         type=Path,
@@ -119,6 +131,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skill-dir", type=Path)
     parser.add_argument("--provider", choices=("deepseek",), default="deepseek")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--tool-choice",
+        choices=("auto", "required"),
+        default="auto",
+        help="Provider tool policy; auto supports DeepSeek thinking mode.",
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=_positive_float, default=60.0)
     parser.add_argument("--max-retries", type=_non_negative_int, default=2)
@@ -144,6 +162,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        args.loaded_env_file = load_dotenv(
+            args.env_file,
+            disabled=args.no_env_file,
+        )
         if args.command == "run":
             return _run_command(args)
         if args.command == "rollout":
@@ -153,6 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         AgentSkillError,
         CatalogError,
         CLIError,
+        DotEnvError,
         HarnessError,
         ProviderError,
         RolloutError,
@@ -180,6 +203,7 @@ def _run_command(args: argparse.Namespace) -> int:
             harness=harness,
             skill=skill,
             max_model_turns=args.max_model_turns,
+            tool_choice=args.tool_choice,
         ).run(args.task_id, max_steps=args.max_steps)
     payload = result.model_dump_json(indent=2)
     if args.output is None:
@@ -211,6 +235,7 @@ def _rollout_command(
                 harness=harness,
                 skill=skill,
                 max_model_turns=args.max_model_turns,
+                tool_choice=args.tool_choice,
             )
 
         rollout = RolloutRunner(
@@ -274,9 +299,13 @@ def _rollout_metadata(
         "base_url": args.base_url,
         "provider_parameters": _redact_parameters(parameters),
         "max_model_turns": args.max_model_turns,
+        "tool_choice": args.tool_choice,
         "skill_name": skill.name,
         "skill_sha256": skill.source_sha256,
         "harness_manifest": harness_manifest,
+        "env_file": (
+            str(args.loaded_env_file) if args.loaded_env_file is not None else None
+        ),
     }
 
 

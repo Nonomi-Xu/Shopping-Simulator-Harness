@@ -116,6 +116,15 @@ class RolloutRunnerTest(unittest.TestCase):
         self.assertEqual(report.summary.average_reward, 0.5)
         self.assertEqual(report.summary.average_valid_reward, 1.0)
         self.assertEqual(report.summary.usage.total_tokens, 42)
+        self.assertEqual(report.records[0].consumption.model_turn_count, 3)
+        self.assertEqual(report.records[0].consumption.tool_call_count, 3)
+        self.assertEqual(report.records[0].consumption.usage.total_tokens, 42)
+        self.assertGreaterEqual(
+            report.records[0].consumption.duration_seconds,
+            0.0,
+        )
+        self.assertEqual(report.records[1].consumption.model_turn_count, 0)
+        self.assertIsNone(report.records[1].consumption.usage)
         self.assertEqual(
             report.summary.terminal_reason_counts,
             {"provider_error": 1, "submitted": 1},
@@ -128,7 +137,22 @@ class RolloutRunnerTest(unittest.TestCase):
             encoding="utf-8"
         ).splitlines()
         self.assertEqual(len(lines), 2)
-        self.assertEqual(json.loads(lines[0])["index"], 0)
+        first_run = json.loads(lines[0])
+        self.assertEqual(first_run["index"], 0)
+        self.assertEqual(
+            first_run["consumption"]["usage"]["total_tokens"],
+            42,
+        )
+        consumption_lines = (output_dir / "consumption.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        self.assertEqual(len(consumption_lines), 2)
+        first_consumption = json.loads(consumption_lines[0])
+        self.assertEqual(first_consumption["task_id"], self.eval_task_id)
+        self.assertEqual(
+            first_consumption["consumption"]["usage"]["total_tokens"],
+            42,
+        )
         summary = json.loads(
             (output_dir / "summary.json").read_text(encoding="utf-8")
         )
@@ -171,6 +195,9 @@ class RolloutRunnerTest(unittest.TestCase):
         record = report.records[0]
         self.assertIsNone(record.result)
         self.assertEqual(record.error_type, "RuntimeError")
+        self.assertEqual(record.consumption.model_turn_count, 0)
+        self.assertEqual(record.consumption.tool_call_count, 0)
+        self.assertIsNone(record.consumption.usage)
         self.assertEqual(report.summary.unexpected_error_count, 1)
         self.assertEqual(
             report.summary.terminal_reason_counts,
@@ -229,6 +256,7 @@ class RolloutRunnerTest(unittest.TestCase):
                         str(self.index_path),
                         "--max-steps",
                         "7",
+                        "--no-env-file",
                     ]
                 )
 
@@ -236,6 +264,7 @@ class RolloutRunnerTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "completed")
         self.assertTrue(payload["session"]["evaluation"]["strict_success"])
+        self.assertEqual(provider.requests[0]["tool_choice"], "auto")
 
     def test_cli_rollout_creates_artifacts_and_compact_stdout(self) -> None:
         output = io.StringIO()
@@ -257,6 +286,7 @@ class RolloutRunnerTest(unittest.TestCase):
                         "cli_contract",
                         "--max-steps",
                         "7",
+                        "--no-env-file",
                     ]
                 )
 
