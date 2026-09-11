@@ -12,7 +12,7 @@ import sqlite3
 from .NFKC import normalize_query
 from .product_projection import project_public_product
 
-SEARCH_VERSION = "shopsimulator-multifield-bm25-v2"
+SEARCH_VERSION = "shopsimulator-multifield-bm25-v3"
 INDEX_SCHEMA_VERSION = 1
 CATALOG_SCHEMA_VERSION = 1
 _HAN_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
@@ -338,7 +338,10 @@ class MultiFieldBM25Searcher:
         tokens = search_tokens(query)
         if not tokens or int(k) <= 0:
             return []
-        weight_values = [*(self.weights[field] for field in FIELDS)]
+        # bm25() weights are positional and include every FTS5 column.  The
+        # first column is the unindexed ASIN, so reserve its position before
+        # appending the weights for title through bullets.
+        weight_values = [0.0, *(self.weights[field] for field in FIELDS)]
         weight_placeholders = ", ".join("?" for _ in weight_values)
         rows = self._connection.execute(
             f"SELECT asin, bm25(products, {weight_placeholders}) AS score FROM products "

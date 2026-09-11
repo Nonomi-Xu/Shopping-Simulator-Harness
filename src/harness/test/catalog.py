@@ -128,6 +128,47 @@ class ProductCatalogTest(unittest.TestCase):
             [hit.score for hit in expected_hits],
         )
 
+    def test_bm25_field_weights_account_for_unindexed_asin_column(self) -> None:
+        products = [
+            {
+                "asin": "000000000002",
+                "title": "needle",
+                "shop_name": "other",
+                "category": "test",
+            },
+            {
+                "asin": "000000000001",
+                "title": "other",
+                "shop_name": "needle",
+                "category": "test",
+            },
+        ]
+        weights = {
+            "title": 100.0,
+            "brand": 1.0,
+            "category": 1.0,
+            "model": 1.0,
+            "attributes": 1.0,
+            "options": 1.0,
+            "bullets": 1.0,
+        }
+        build_index(
+            products,
+            self.index_path,
+            product_data_sha256=self.product_sha256,
+            field_weights=weights,
+        )
+
+        searcher = MultiFieldBM25Searcher(self.index_path)
+        self.addCleanup(searcher.close)
+        hits = searcher.search("needle", k=2)
+
+        self.assertEqual(
+            [hit.asin for hit in hits],
+            ["000000000002", "000000000001"],
+        )
+        self.assertGreater(hits[0].score, hits[1].score)
+
     def test_search_honors_limit_and_validates_arguments(self) -> None:
         with self._catalog() as catalog:
             self.assertEqual(len(catalog.search("冰箱", limit=1)), 1)

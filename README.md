@@ -60,7 +60,7 @@ flowchart LR
 | 商品目录 | 搜索公开商品摘要，按 ASIN 获取公开详情 | `ProductCatalog` |
 | 任务仓库 | 生成不包含答案的稳定任务 ID，隔离公开 Query 与私有 Gold Facts | `TaskStore` |
 | 确定性评分 | 校验提交格式、商品、规格与目标匹配情况 | `evaluate_submission` |
-| 单任务 Session | 守卫搜索、详情访问与终局提交，记录有界可回放轨迹 | `ShoppingSession` |
+| 单任务 Session | 受控搜索、详情访问与终局提交，记录有界可回放轨迹 | `ShoppingSession` |
 | Harness 管理层 | 校验数据契约，创建、分发、查询和释放多个隔离 Session | `ShoppingHarness` |
 | Agent 定义与策略 | 约束检索、候选比较、规格选择和终局提交 | `skills/shopping-agent/SKILL.md` |
 | 模型 Provider | 统一消息、工具调用、终止原因和 Token Usage | `ModelProvider` |
