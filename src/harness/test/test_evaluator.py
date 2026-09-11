@@ -55,7 +55,7 @@ class _Catalog:
 def _facts(**updates) -> PrivateTaskFacts:
     values = {
         "task_id": TASK_ID,
-        "split": "eval",
+        "split": "all",
         "target_asin": TARGET_ASIN,
         "target_title": "测试商品",
         "target_category": "测试分类",

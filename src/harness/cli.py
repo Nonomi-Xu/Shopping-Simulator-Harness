@@ -67,8 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     selection = rollout_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument(
         "--split",
-        choices=("train", "eval"),
-        help="Dataset split from which to sample tasks.",
+        choices=("all", "test"),
+        help="all: every task; test: fixed smoke-test subset.",
     )
     selection.add_argument(
         "--task-id",
@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     rollout_parser.add_argument(
         "--count",
         type=_positive_int,
-        help="Required with --split; number of tasks to sample.",
+        help="Optional sample size; omit to run the entire selected dataset.",
     )
     rollout_parser.add_argument(
         "--seed",
@@ -218,8 +218,6 @@ def _rollout_command(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
 ) -> int:
-    if args.split is not None and args.count is None:
-        parser.error("--count is required when using --split")
     if args.task_ids is not None and args.count is not None:
         parser.error("--count can only be used with --split")
 

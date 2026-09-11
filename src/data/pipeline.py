@@ -39,27 +39,23 @@ def prepare_data(*, force: bool = False) -> dict:
             INDEX_PATH,
             product_data_sha256=product_sha256,
         )
-        manifest["dataset"] = validation
-        manifest["source_gzip_sha256"] = sha256_file(GZIP_PATH)
-
-        temporary_manifest = MANIFEST_PATH.with_suffix(
-            MANIFEST_PATH.suffix + ".tmp"
-        )
-        temporary_manifest.write_text(
-            json.dumps(
-                manifest,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        temporary_manifest.replace(MANIFEST_PATH)
     else:
         manifest = json.loads(
             MANIFEST_PATH.read_text(encoding="utf-8")
         )
+
+    # Refresh selection metadata even when the product index is already current.
+    from ..harness.tasks import TaskStore
+
+    manifest["dataset"] = validation
+    manifest["tasks"] = TaskStore(PRODUCTS_PATH).manifest
+    manifest["source_gzip_sha256"] = sha256_file(GZIP_PATH)
+    temporary_manifest = MANIFEST_PATH.with_suffix(MANIFEST_PATH.suffix + ".tmp")
+    temporary_manifest.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_manifest.replace(MANIFEST_PATH)
 
     return manifest
 

@@ -105,7 +105,7 @@ class ShoppingHarness:
                 "catalog": deepcopy(self._catalog.manifest),
             }
 
-    def list_task_ids(self, split: TaskSplit) -> list[str]:
+    def list_task_ids(self, split: TaskSplit = "all") -> list[str]:
         """Return frozen task IDs for a public dataset split."""
         with self._lock:
             self._ensure_open()

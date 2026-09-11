@@ -51,7 +51,7 @@ class _TaskStore:
         )
         self.private_facts = PrivateTaskFacts(
             task_id=TASK_ID,
-            split="eval",
+            split="all",
             target_asin=TARGET_ASIN,
             target_title="秘密目标商品",
             target_category="秘密分类",

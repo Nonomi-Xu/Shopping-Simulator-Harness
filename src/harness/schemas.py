@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-TaskSplit = Literal["train", "eval"]
+TaskSplit = Literal["all", "test"]
 EvaluationTerminalReason = Literal[
     "strict_success",
     "partial_match",

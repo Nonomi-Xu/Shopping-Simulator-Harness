@@ -64,32 +64,31 @@ def collect_unresolved_tasks(products_path: str | Path) -> dict[str, Any]:
 
     unresolved = []
     needed_rows: set[int] = set()
-    for split in ("train", "eval"):
-        for task_id in store.list_task_ids(split):
-            facts = store.get_private_facts(task_id)
-            if not facts.unresolved_option_values:
-                continue
-            public_task = store.get_public_task(task_id)
-            needed_rows.add(facts.source_row_number)
-            unresolved.append(
-                {
-                    "task_id": task_id,
-                    "split": facts.split,
-                    "query": public_task.query,
-                    "target_asin": facts.target_asin,
-                    "target_title": facts.target_title,
-                    "target_category": facts.target_category,
-                    "required_option_values": facts.required_option_values,
-                    "resolved_options": facts.required_options,
-                    "unresolved_option_values": (
-                        facts.unresolved_option_values
-                    ),
-                    "source_row_number": facts.source_row_number,
-                    "source_instruction_index": (
-                        facts.source_instruction_index
-                    ),
-                }
-            )
+    for task_id in store.list_task_ids("all"):
+        facts = store.get_private_facts(task_id)
+        if not facts.unresolved_option_values:
+            continue
+        public_task = store.get_public_task(task_id)
+        needed_rows.add(facts.source_row_number)
+        unresolved.append(
+            {
+                "task_id": task_id,
+                "split": facts.split,
+                "query": public_task.query,
+                "target_asin": facts.target_asin,
+                "target_title": facts.target_title,
+                "target_category": facts.target_category,
+                "required_option_values": facts.required_option_values,
+                "resolved_options": facts.required_options,
+                "unresolved_option_values": (
+                    facts.unresolved_option_values
+                ),
+                "source_row_number": facts.source_row_number,
+                "source_instruction_index": (
+                    facts.source_instruction_index
+                ),
+            }
+        )
 
     products_by_row: dict[int, dict[str, Any]] = {}
     for row_number, product in enumerate(
@@ -138,9 +137,11 @@ def collect_unresolved_tasks(products_path: str | Path) -> dict[str, Any]:
             "unresolved_option_value_count": unresolved_value_count,
             "split_counts": {
                 split: sum(
-                    task["split"] == split for task in unresolved
+                    task["task_id"] in selected_ids for task in unresolved
                 )
-                for split in ("train", "eval")
+                for split, selected_ids in (
+                    (name, set(store.list_task_ids(name))) for name in ("all", "test")
+                )
             },
         },
         "tasks": unresolved,

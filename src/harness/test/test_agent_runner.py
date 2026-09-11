@@ -165,7 +165,7 @@ class AgentRunnerTest(unittest.TestCase):
             default_max_steps=7,
         )
         self.addCleanup(self.harness.close)
-        self.task_id = self.harness.list_task_ids("eval")[0]
+        self.task_id = self.harness.list_task_ids("all")[0]
 
     def test_skill_loader_compiles_all_declared_contracts(self) -> None:
         skill = load_agent_skill()

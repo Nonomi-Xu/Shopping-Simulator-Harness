@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import hashlib
 import math
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from ..data.build_index import iter_json_array
 from ..data.NFKC import normalize_query
@@ -14,13 +14,15 @@ from ..data.search_bm25 import sha256_file
 from .schemas import (
     PrivateTaskFacts,
     PublicTask,
+    TaskSplit,
 )
 
-TaskSplit = Literal["train", "eval"]
-TASK_STORE_VERSION = "shopping-tasks-v1"
+TASK_STORE_VERSION = "shopping-tasks-v2"
 TASK_ID_VERSION = "opaque-row-query-v1"
 OPTION_MATCH_VERSION = "nfkc-casefold-alnum-v1"
-VALID_SPLITS = ("train", "eval")
+VALID_SPLITS = ("all", "test")
+TEST_TASK_COUNT = 10
+TEST_TASK_SEED = 42
 OptionCandidate = tuple[str, str]
 OptionLookup = dict[tuple[str, str], set[OptionCandidate]]
 
@@ -71,6 +73,13 @@ class TaskStore:
         # Count of tasks with at least one unresolved option value
         self._tasks_with_unresolved_options = 0
         self._load()
+        # Test is a reproducible smoke-test subset, also included in all.
+        test_ids = set(self.sample_task_ids(
+            "all", min(TEST_TASK_COUNT, len(self._task_ids_by_split["all"])), seed=TEST_TASK_SEED,
+        ))
+        self._task_ids_by_split["test"] = [
+            task_id for task_id in self._task_ids_by_split["all"] if task_id in test_ids
+        ]
         self.product_data_sha256 = sha256_file(self.products_path)
 
     def __len__(self) -> int:
@@ -89,6 +98,12 @@ class TaskStore:
                 split: len(self._task_ids_by_split[split])
                 for split in VALID_SPLITS
             },
+            "test_subset": {
+                "count_limit": TEST_TASK_COUNT,
+                "seed": TEST_TASK_SEED,
+                "included_in_all": True,
+                "task_ids": self.list_task_ids("test"),
+            },
             "data_quality": {
                 "ignored_empty_attribute_count": (
                     self._ignored_empty_attribute_count
@@ -102,8 +117,8 @@ class TaskStore:
             },
         }
 
-    def list_task_ids(self, split: TaskSplit) -> list[str]:
-        """Return task IDs for a split in frozen source order."""
+    def list_task_ids(self, split: TaskSplit = "all") -> list[str]:
+        """Return all tasks or the fixed Test subset in source order."""
         normalized_split = self._validated_split(split)
         return list(self._task_ids_by_split[normalized_split])
 
@@ -176,7 +191,6 @@ class TaskStore:
                 raise TaskDataError(f"duplicate product ASIN: {target_asin}")
             seen_asins.add(target_asin)
 
-            split = self._validated_source_split(product.get("tag"), context)
             instructions = product.get("instructions")
             if not isinstance(instructions, list) or not instructions:
                 raise TaskDataError(f"{context} has no instructions")
@@ -188,7 +202,7 @@ class TaskStore:
                     instruction=instruction,
                     row_number=row_number,
                     instruction_index=instruction_index,
-                    split=split,
+                    split="all",
                     target_asin=target_asin,
                     option_lookup=option_lookup,
                 )
@@ -410,12 +424,6 @@ class TaskStore:
         if not text:
             raise TaskDataError(f"{context}.{field_name} must not be empty")
         return text
-
-    @staticmethod
-    def _validated_source_split(value: object, context: str) -> TaskSplit:
-        if value not in VALID_SPLITS:
-            raise TaskDataError(f"{context} has invalid split: {value!r}")
-        return value  # type: ignore[return-value]
 
     @staticmethod
     def _validated_split(value: object) -> TaskSplit:

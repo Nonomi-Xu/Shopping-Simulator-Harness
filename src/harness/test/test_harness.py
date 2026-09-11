@@ -98,11 +98,11 @@ class ShoppingHarnessTest(unittest.TestCase):
             default_max_steps=7,
         )
         self.addCleanup(self.harness.close)
-        self.eval_task_id = self.harness.list_task_ids("eval")[0]
+        self.target_task_id = self.harness.list_task_ids("all")[0]
 
     def test_manifest_and_public_task_boundary_are_auditable(self) -> None:
         manifest = self.harness.manifest
-        task = self.harness.get_public_task(self.eval_task_id)
+        task = self.harness.get_public_task(self.target_task_id)
 
         self.assertEqual(manifest["harness_version"], "shopping-harness-v1")
         self.assertEqual(manifest["default_max_steps"], 7)
@@ -122,15 +122,16 @@ class ShoppingHarnessTest(unittest.TestCase):
         )
 
     def test_task_sampling_remains_deterministic(self) -> None:
-        first = self.harness.sample_task_ids("eval", 1, seed=42)
-        second = self.harness.sample_task_ids("eval", 1, seed=42)
+        first = self.harness.sample_task_ids("all", 1, seed=42)
+        second = self.harness.sample_task_ids("all", 1, seed=42)
 
         self.assertEqual(first, second)
-        self.assertEqual(first, [self.eval_task_id])
+        self.assertEqual(len(first), 1)
+        self.assertIn(first[0], self.harness.list_task_ids("all"))
 
     def test_create_sessions_assigns_unique_stable_ids(self) -> None:
-        first = self.harness.create_session(self.eval_task_id)
-        second = self.harness.create_session(self.eval_task_id, max_steps=3)
+        first = self.harness.create_session(self.target_task_id)
+        second = self.harness.create_session(self.target_task_id, max_steps=3)
 
         self.assertEqual(first.state.session_id, "session_00000001")
         self.assertEqual(second.state.session_id, "session_00000002")
@@ -140,20 +141,20 @@ class ShoppingHarnessTest(unittest.TestCase):
 
     def test_explicit_duplicate_session_id_is_rejected(self) -> None:
         self.harness.create_session(
-            self.eval_task_id,
+            self.target_task_id,
             session_id="custom-session",
         )
 
         with self.assertRaises(DuplicateSessionError) as raised:
             self.harness.create_session(
-                self.eval_task_id,
+                self.target_task_id,
                 session_id="custom-session",
             )
 
         self.assertEqual(raised.exception.code, "duplicate_session")
 
     def test_dispatch_runs_complete_session_without_exposing_components(self) -> None:
-        started = self.harness.create_session(self.eval_task_id)
+        started = self.harness.create_session(self.target_task_id)
         session_id = started.state.session_id
 
         search = self.harness.dispatch(
@@ -196,7 +197,7 @@ class ShoppingHarnessTest(unittest.TestCase):
         self.assertTrue(self.harness.get_evaluation(session_id).strict_success)
 
     def test_session_snapshots_are_independent_copies(self) -> None:
-        started = self.harness.create_session(self.eval_task_id)
+        started = self.harness.create_session(self.target_task_id)
         session_id = started.state.session_id
         snapshot = self.harness.get_session(session_id)
 
@@ -208,7 +209,7 @@ class ShoppingHarnessTest(unittest.TestCase):
         self.assertEqual(fresh.history, [])
 
     def test_release_protects_active_session_and_returns_terminal_snapshot(self) -> None:
-        started = self.harness.create_session(self.eval_task_id)
+        started = self.harness.create_session(self.target_task_id)
         session_id = started.state.session_id
 
         with self.assertRaises(ActiveSessionReleaseError) as raised:
@@ -222,7 +223,7 @@ class ShoppingHarnessTest(unittest.TestCase):
 
     def test_terminated_session_can_be_released_without_force(self) -> None:
         started = self.harness.create_session(
-            self.eval_task_id,
+            self.target_task_id,
             max_steps=1,
         )
         session_id = started.state.session_id
@@ -245,12 +246,12 @@ class ShoppingHarnessTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, "session_not_found")
 
     def test_close_is_idempotent_and_blocks_runtime_operations(self) -> None:
-        started = self.harness.create_session(self.eval_task_id)
+        started = self.harness.create_session(self.target_task_id)
         self.harness.close()
         self.harness.close()
 
         with self.assertRaises(HarnessClosedError) as raised:
-            self.harness.create_session(self.eval_task_id)
+            self.harness.create_session(self.target_task_id)
         self.assertEqual(raised.exception.code, "harness_closed")
 
         with self.assertRaises(HarnessClosedError):

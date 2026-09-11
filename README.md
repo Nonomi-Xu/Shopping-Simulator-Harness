@@ -56,7 +56,7 @@ flowchart LR
 
 | 模块 | 作用 | 入口 |
 |---|---|---|
-| 数据准备 | 解压数据、校验 ASIN 与 split、原子化构建索引 | `shopping-harness-prepare` |
+| 数据准备 | 解压数据、校验全量数据与 ASIN、原子化构建索引 | `shopping-harness-prepare` |
 | 商品目录 | 搜索公开商品摘要，按 ASIN 获取公开详情 | `ProductCatalog` |
 | 任务仓库 | 生成不包含答案的稳定任务 ID，隔离公开 Query 与私有 Gold Facts | `TaskStore` |
 | 确定性评分 | 校验提交格式、商品、规格与目标匹配情况 | `evaluate_submission` |
@@ -223,7 +223,7 @@ with ShoppingHarness(
     products_path=data_dir / "fine_items_eval_train_all.json",
     index_path=data_dir / "product_search.sqlite3",
 ) as harness:
-    task_id = harness.sample_task_ids("eval", 1, seed=42)[0]
+    task_id = harness.sample_task_ids("test", 1, seed=42)[0]
     started = harness.create_session(task_id)
     session_id = started.state.session_id
 
@@ -291,7 +291,7 @@ with ShoppingHarness(
     products_path=data_dir / "fine_items_eval_train_all.json",
     index_path=data_dir / "product_search.sqlite3",
 ) as harness:
-    task_id = harness.sample_task_ids("eval", 1, seed=42)[0]
+    task_id = harness.sample_task_ids("test", 1, seed=42)[0]
     result = AgentRunner(provider=provider, harness=harness).run(task_id)
 
 print(result.model_dump_json(indent=2))
@@ -327,19 +327,29 @@ shopping-agent run \
 
 ### 批量 Rollout
 
-从冻结 split 中按 Seed 确定性采样并批量运行：
+使用固定 Test 子集测试完整通路：
 
 ```bash
 shopping-agent rollout \
-  --split eval \
-  --count 100 \
-  --seed 42 \
+  --split test \
   --workers 4 \
   --model deepseek-v4-flash \
   --output-root outputs/rollouts
 ```
 
-`--count` 在使用 `--split` 时是必填项，避免误运行整个数据集并产生意外 API 消耗。
+Harness 和 Agent 只使用 `all` 与 `test`，不再按原始 `tag` 划分 train/eval。
+`all` 覆盖所有任务；`test` 使用固定整数 Seed 42 从全量任务中按任务 ID 的 SHA-256
+排序选取 10 条（不足 10 条时全部选取），并按源数据顺序返回，用于验证通路。
+Test 是 all 的子集，仍计入全量检测；商品检索索引始终包含全部商品。
+数据准备 manifest 的 `tasks.test_subset` 记录 Test 的任务 ID、Seed 与数量上限。
+原始数据文件名和标签保留为来源信息，不参与任务筛选。
+
+省略 `--count` 运行所选集合的全部任务；指定时按 `--seed` 确定性抽样，
+不会改变固定 Test 集的成员。全量检测运行：
+
+```bash
+shopping-agent rollout --split all
+```
 也可以多次传入 `--task-id` 来运行显式任务列表：
 
 ```bash
@@ -405,7 +415,7 @@ pyproject.toml                    包元数据、依赖与命令行入口
 data/                             本地数据、索引、Manifest 与诊断结果
 src/data/
   decompress.py                   Gzip 解压
-  validate.py                     数据集完整性与 split 校验
+  validate.py                     全量数据完整性校验
   product_projection.py           原始商品到公开白名单字段的投影
   search_bm25.py                  分词、多字段 BM25、目录和 Manifest
   build_index.py                  流式读取 JSON 并构建索引

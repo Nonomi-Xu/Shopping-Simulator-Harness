@@ -77,8 +77,8 @@ class RolloutRunnerTest(unittest.TestCase):
             default_max_steps=7,
         )
         self.addCleanup(self.harness.close)
-        self.eval_task_id = self.harness.list_task_ids("eval")[0]
-        self.train_task_id = self.harness.list_task_ids("train")[0]
+        self.target_task_id = self.harness.list_task_ids("all")[0]
+        self.alternative_task_id = self.harness.list_task_ids("all")[1]
 
     def test_batch_continues_and_writes_full_records_and_summary(self) -> None:
         providers = [
@@ -98,7 +98,7 @@ class RolloutRunnerTest(unittest.TestCase):
             harness=self.harness,
             runner_factory=runner_factory,
         ).run_tasks(
-            [self.eval_task_id, self.train_task_id],
+            [self.target_task_id, self.alternative_task_id],
             max_steps=7,
             output_root=self.directory / "rollouts",
             rollout_id="batch_contract",
@@ -148,7 +148,7 @@ class RolloutRunnerTest(unittest.TestCase):
         ).splitlines()
         self.assertEqual(len(consumption_lines), 2)
         first_consumption = json.loads(consumption_lines[0])
-        self.assertEqual(first_consumption["task_id"], self.eval_task_id)
+        self.assertEqual(first_consumption["task_id"], self.target_task_id)
         self.assertEqual(
             first_consumption["consumption"]["usage"]["total_tokens"],
             42,
@@ -171,7 +171,7 @@ class RolloutRunnerTest(unittest.TestCase):
             harness=self.harness,
             runner_factory=runner_factory,
         ).run_tasks(
-            [self.eval_task_id, self.eval_task_id],
+            [self.target_task_id, self.target_task_id],
             workers=2,
             rollout_id="parallel_contract",
         )
@@ -190,7 +190,7 @@ class RolloutRunnerTest(unittest.TestCase):
         report = RolloutRunner(
             harness=self.harness,
             runner_factory=broken_factory,
-        ).run_tasks([self.eval_task_id], rollout_id="broken_contract")
+        ).run_tasks([self.target_task_id], rollout_id="broken_contract")
 
         record = report.records[0]
         self.assertIsNone(record.result)
@@ -217,7 +217,7 @@ class RolloutRunnerTest(unittest.TestCase):
 
         with self.assertRaises(RolloutError):
             rollout.run_tasks(
-                [self.eval_task_id],
+                [self.target_task_id],
                 output_root=root,
                 rollout_id="duplicate",
             )
@@ -230,15 +230,15 @@ class RolloutRunnerTest(unittest.TestCase):
                 harness=self.harness,
             ),
         ).run_split(
-            "eval",
+            "all",
             1,
             seed="fixed-seed",
             rollout_id="sample_contract",
         )
 
-        self.assertEqual(report.split, "eval")
+        self.assertEqual(report.split, "all")
         self.assertEqual(report.seed, "fixed-seed")
-        self.assertEqual(report.task_ids, [self.eval_task_id])
+        self.assertEqual(report.task_ids, [self.target_task_id])
 
     def test_cli_run_executes_without_network_using_provider_contract(self) -> None:
         output = io.StringIO()
@@ -249,7 +249,7 @@ class RolloutRunnerTest(unittest.TestCase):
                     [
                         "run",
                         "--task-id",
-                        self.eval_task_id,
+                        self.target_task_id,
                         "--products-path",
                         str(self.products_path),
                         "--index-path",
@@ -275,7 +275,7 @@ class RolloutRunnerTest(unittest.TestCase):
                     [
                         "rollout",
                         "--task-id",
-                        self.eval_task_id,
+                        self.target_task_id,
                         "--products-path",
                         str(self.products_path),
                         "--index-path",
@@ -299,14 +299,49 @@ class RolloutRunnerTest(unittest.TestCase):
             .is_file()
         )
 
-    def test_cli_requires_count_for_split(self) -> None:
-        stderr = io.StringIO()
-        with redirect_stderr(stderr):
-            with self.assertRaises(SystemExit) as raised:
-                main(["rollout", "--split", "eval"])
+    def test_cli_accepts_full_selection_without_count(self) -> None:
+        from src.harness.cli import build_parser
 
-        self.assertEqual(raised.exception.code, 2)
-        self.assertIn("--count is required", stderr.getvalue())
+        for split in ("all", "test"):
+            args = build_parser().parse_args(["rollout", "--split", split])
+            self.assertIsNone(args.count)
+            report = RolloutRunner(
+                harness=self.harness,
+                runner_factory=lambda: AgentRunner(
+                    provider=successful_provider(TARGET_ASIN, "白色"),
+                    harness=self.harness,
+                ),
+            ).run_split(split)
+            self.assertEqual(report.summary.requested_count,
+                             len(self.harness.list_task_ids(split)))
+            self.assertEqual(report.split, split)
+            self.assertIsNone(report.seed)
+
+    def test_cli_test_selection_runs_all_selected_tasks(self) -> None:
+        output = io.StringIO()
+        with patch("src.harness.cli.DeepSeekProvider", side_effect=lambda **kwargs:
+                   successful_provider(TARGET_ASIN, "白色")), redirect_stdout(output):
+            code = main([
+                "rollout", "--split", "test",
+                "--products-path", str(self.products_path),
+                "--index-path", str(self.index_path),
+                "--output-root", str(self.directory / "cli-test"),
+                "--no-env-file",
+            ])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["summary"]["requested_count"], 2)
+        report = json.loads((Path(payload["output_dir"]) / "summary.json").read_text())
+        self.assertEqual(report["task_ids"], self.harness.list_task_ids("test"))
+        self.assertEqual(report["split"], "test")
+        self.assertIsNone(report["seed"])
+
+    def test_cli_rejects_legacy_splits(self) -> None:
+        from src.harness.cli import build_parser
+
+        for split in ("train", "eval"):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                build_parser().parse_args(["rollout", "--split", split])
 
 
 if __name__ == "__main__":

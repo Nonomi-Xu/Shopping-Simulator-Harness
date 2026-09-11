@@ -35,6 +35,8 @@ class RolloutError(RuntimeError):
 class RolloutHarness(Protocol):
     """Harness operations required above the single-task Agent loop."""
 
+    def list_task_ids(self, split: TaskSplit) -> list[str]: ...
+
     def sample_task_ids(
         self,
         split: TaskSplit,
@@ -182,21 +184,24 @@ class RolloutRunner:
     def run_split(
         self,
         split: TaskSplit,
-        count: int,
+        count: int | None = None,
         *,
-        seed: int | str,
+        seed: int | str = 42,
         workers: int = 1,
         max_steps: int | None = None,
         output_root: str | Path | None = None,
         rollout_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> RolloutReport:
-        """Select a stable sample and execute it as one rollout."""
-        if isinstance(count, bool) or not isinstance(count, int):
-            raise TypeError("count must be an integer")
-        if count < 1:
-            raise ValueError("count must be positive")
-        task_ids = self._harness.sample_task_ids(split, count, seed=seed)
+        """Run the full selection, or a deterministic sample when count is given."""
+        if count is None:
+            task_ids = self._harness.list_task_ids(split)
+        else:
+            if isinstance(count, bool) or not isinstance(count, int):
+                raise TypeError("count must be an integer")
+            if count < 1:
+                raise ValueError("count must be positive")
+            task_ids = self._harness.sample_task_ids(split, count, seed=seed)
         return self.run_tasks(
             task_ids,
             workers=workers,
@@ -204,7 +209,7 @@ class RolloutRunner:
             output_root=output_root,
             rollout_id=rollout_id,
             split=split,
-            seed=seed,
+            seed=seed if count is not None else None,
             metadata=metadata,
         )
 

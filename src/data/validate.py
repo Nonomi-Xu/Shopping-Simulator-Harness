@@ -15,7 +15,7 @@ MANIFEST_PATH = HARNESS_ENV / "data" / "product_search.manifest.json"
 def validate_products(path: Path) -> dict:
     """校验商品数据，并返回可审计的数据统计。"""
     seen_asins: set[str] = set()
-    split_counts = {"train": 0, "eval": 0}
+    task_count = 0
 
     for row_number, product in enumerate(iter_json_array(path), start=1):
         asin = str(product.get("asin") or "").strip()
@@ -26,20 +26,15 @@ def validate_products(path: Path) -> dict:
             raise ValueError(f"发现重复 asin：{asin}")
         seen_asins.add(asin)
 
-        tag = product.get("tag")
-        if tag not in split_counts:
-            raise ValueError(
-                f"商品 {asin} 的 tag 非法：{tag!r}"
-            )
-        split_counts[tag] += 1
-
         instructions = product.get("instructions")
         if not isinstance(instructions, list) or not instructions:
             raise ValueError(f"商品 {asin} 缺少 instructions")
+        task_count += len(instructions)
 
     return {
         "product_count": len(seen_asins),
-        "split_counts": split_counts,
+        "task_count": task_count,
+        "scope": "all",
     }
 
 def index_is_current(product_sha256: str) -> bool:
