@@ -19,8 +19,16 @@ from pydantic import ValidationError
 from ..data.search_bm25 import (
     CATALOG_SCHEMA_VERSION,
     MultiFieldBM25Searcher,
+    search_tokens,
 )
-from .schemas import ProductDetail, ProductSummary
+from ..data.NFKC import normalize_query
+from .schemas import (
+    ProductDetail,
+    ProductSummary,
+    SearchFilters,
+    SearchPage,
+    SearchProductsAction,
+)
 
 
 PUBLIC_PROJECTION_VERSION = "product-public-v1"
@@ -73,9 +81,9 @@ class ProductCatalog:
                 check_same_thread=False,
             )
             self._connection.row_factory = sqlite3.Row
-            self._connection.execute(
-                "SELECT asin FROM product_catalog LIMIT 0"
-            )
+            from ..data.product_facts import sqlite_predicates
+            self._connection.create_function("public_predicates", 9, sqlite_predicates, deterministic=True)
+            self._connection.execute("SELECT asin FROM product_catalog LIMIT 0")
         except Exception:
             self._searcher.close()
             connection = getattr(self, "_connection", None)
@@ -95,6 +103,9 @@ class ProductCatalog:
         query: str,
         *,
         limit: int = 20,
+        filters: SearchFilters | None = None,
+        offset: int = 0,
+        exclude_asins: list[str] | None = None,
     ) -> list[ProductSummary]:
         """Return public product summaries in deterministic BM25 rank order."""
         self._ensure_open()
@@ -103,12 +114,59 @@ class ProductCatalog:
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("limit must be an integer")
         if not 1 <= limit <= MAX_SEARCH_LIMIT:
-            raise ValueError(
-                f"limit must be between 1 and {MAX_SEARCH_LIMIT}"
-            )
+            raise ValueError(f"limit must be between 1 and {MAX_SEARCH_LIMIT}")
 
+        # Preserve the lower-level catalog API's empty-query behavior. The model
+        # tool contract still requires a nonblank query at the Session boundary.
+        if not query.strip():
+            return []
+
+        request = SearchProductsAction(
+            query=query,
+            limit=limit,
+            filters=filters or SearchFilters(),
+            offset=offset,
+            exclude_asins=exclude_asins or [],
+        )
+        return self._search(request, limit)
+
+    def search_page(
+        self, request: SearchProductsAction
+    ) -> tuple[list[ProductSummary], SearchPage]:
+        self._ensure_open()
+        results = self._search(request, request.limit + 1)
+        more = len(results) > request.limit
+        total = self.count_search_results(request) if request.filters.predicates else None
+        return results[: request.limit], SearchPage(
+            total_results=total,
+            offset=request.offset,
+            has_more=more,
+            next_offset=request.offset + request.limit if more else None,
+        )
+
+    def count_search_results(self, request: SearchProductsAction) -> int:
+        """Exact count using the same SQL predicates, independent of page size."""
         with self._lock:
-            hits = self._searcher.search(query, k=limit)
+            return self._searcher.count(request.query, filters=request.filters.model_dump(mode="json"), exclude_asins=request.exclude_asins)
+
+    def eligible_count(self, predicates) -> int:
+        """Private analytics over a fixed public catalogue; does not surface products."""
+        from ..data.product_facts import SQL_PREDICATES
+        with self._lock:
+            if not predicates:
+                return self._connection.execute("SELECT count(*) FROM product_catalog").fetchone()[0]
+            return self._connection.execute("SELECT count(*) FROM product_catalog c WHERE " + SQL_PREDICATES,
+                (json.dumps([p.model_dump(mode="json") for p in predicates], sort_keys=True),)).fetchone()[0]
+
+    def _search(self, request: SearchProductsAction, size: int) -> list[ProductSummary]:
+        with self._lock:
+            hits = self._searcher.search(
+                request.query,
+                k=size,
+                filters=request.filters.model_dump(),
+                offset=request.offset,
+                exclude_asins=request.exclude_asins,
+            )
             if not hits:
                 return []
             rows = self._rows_by_asin(hit.asin for hit in hits)
@@ -132,6 +190,9 @@ class ProductCatalog:
                         price_max=row["price_max"],
                         bm25_score=hit.score,
                         rank=hit.rank,
+                        match_snippets=_match_snippets(
+                            self._detail_from_row(row), request.query
+                        ),
                     )
                 )
             except ValidationError as exc:
@@ -151,9 +212,7 @@ class ProductCatalog:
             ).fetchone()
 
         if row is None:
-            raise ProductNotFoundError(
-                f"product not found: {normalized_asin}"
-            )
+            raise ProductNotFoundError(f"product not found: {normalized_asin}")
         return self._detail_from_row(row)
 
     def contains(self, asin: object) -> bool:
@@ -192,8 +251,7 @@ class ProductCatalog:
         asin_list = list(asins)
         placeholders = ", ".join("?" for _ in asin_list)
         rows = self._connection.execute(
-            "SELECT asin, title, brand, category, price_min, price_max "
-            f"FROM product_catalog WHERE asin IN ({placeholders})",
+            "SELECT * " f"FROM product_catalog WHERE asin IN ({placeholders})",
             asin_list,
         ).fetchall()
         return {row["asin"]: row for row in rows}
@@ -238,3 +296,39 @@ class ProductCatalog:
     def _ensure_open(self) -> None:
         if self._closed:
             raise CatalogError("catalog is closed")
+
+
+def _match_snippets(detail: ProductDetail, query: str) -> list[dict]:
+    """Bounded discovery excerpts, exclusively from the public projection."""
+    tokens = search_tokens(query)
+    values = [
+        ("/title", detail.title),
+        ("/brand", detail.brand or ""),
+        ("/category", detail.category),
+    ]
+    values.extend(
+        (f"/attributes/{i}", value) for i, value in enumerate(detail.attributes)
+    )
+    for axis, options in detail.customization_options.items():
+        escaped = axis.replace("~", "~0").replace("/", "~1")
+        values.extend(
+            (f"/customization_options/{escaped}/{i}/value", option.value)
+            for i, option in enumerate(options)
+        )
+    values.append(("/description", detail.description))
+    results = []
+    for path, value in values:
+        normalized = normalize_query(value)
+        positions = [normalized.find(token) for token in tokens if token in normalized]
+        if positions:
+            start = max(0, min(positions) - 50)
+            results.append(
+                {
+                    "field_path": path,
+                    "text": value[start : start + 180],
+                    "truncated": start > 0 or len(value) > start + 180,
+                }
+            )
+        if len(results) == 3:
+            break
+    return results

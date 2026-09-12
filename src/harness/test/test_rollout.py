@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from src.data.search_bm25 import build_index, sha256_file
 from src.harness.agent import AgentRunner, RolloutError, RolloutRunner
+from src.harness.agent import replay_run
 from src.harness.cli import main
 from src.harness.harness import ShoppingHarness
 from src.harness.providers import ProviderAPIError
@@ -22,12 +23,15 @@ from src.harness.test.test_agent_runner import (
     TARGET_ASIN,
     ScriptedProvider,
     tool_turn,
+    requirement_turn,
+    color_evidence_turn,
 )
 
 
 def successful_provider(asin: str, color: str) -> ScriptedProvider:
     return ScriptedProvider(
         [
+            requirement_turn(color),
             tool_turn(
                 f"search-{asin}",
                 "search_products",
@@ -38,6 +42,7 @@ def successful_provider(asin: str, color: str) -> ScriptedProvider:
                 "get_product",
                 {"asin": asin},
             ),
+            color_evidence_turn(asin, color),
             tool_turn(
                 f"submit-{asin}",
                 "submit_recommendations",
@@ -115,10 +120,20 @@ class RolloutRunnerTest(unittest.TestCase):
         self.assertEqual(report.summary.strict_success_rate, 0.5)
         self.assertEqual(report.summary.average_reward, 0.5)
         self.assertEqual(report.summary.average_valid_reward, 1.0)
-        self.assertEqual(report.summary.usage.total_tokens, 42)
-        self.assertEqual(report.records[0].consumption.model_turn_count, 3)
+        self.assertEqual(report.summary.usage.total_tokens, 70)
+        self.assertEqual(report.summary.total_actions, 5)
+        self.assertEqual(report.summary.total_searches, 1)
+        self.assertEqual(
+            replay_run(report.output_dir / "tasks" / "000001")["outcome"]["status"],
+            "completed",
+        )
+        self.assertEqual(
+            replay_run(report.output_dir / "tasks" / "000002")["outcome"]["status"],
+            "failed",
+        )
+        self.assertEqual(report.records[0].consumption.model_turn_count, 5)
         self.assertEqual(report.records[0].consumption.tool_call_count, 3)
-        self.assertEqual(report.records[0].consumption.usage.total_tokens, 42)
+        self.assertEqual(report.records[0].consumption.usage.total_tokens, 70)
         self.assertGreaterEqual(
             report.records[0].consumption.duration_seconds,
             0.0,
@@ -133,29 +148,25 @@ class RolloutRunnerTest(unittest.TestCase):
         self.assertEqual(report.metadata["provider"], "scripted")
 
         output_dir = self.directory / "rollouts" / "batch_contract"
-        lines = (output_dir / "runs.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        lines = (output_dir / "runs.jsonl").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(lines), 2)
         first_run = json.loads(lines[0])
         self.assertEqual(first_run["index"], 0)
         self.assertEqual(
             first_run["consumption"]["usage"]["total_tokens"],
-            42,
+            70,
         )
-        consumption_lines = (output_dir / "consumption.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        consumption_lines = (
+            (output_dir / "consumption.jsonl").read_text(encoding="utf-8").splitlines()
+        )
         self.assertEqual(len(consumption_lines), 2)
         first_consumption = json.loads(consumption_lines[0])
         self.assertEqual(first_consumption["task_id"], self.target_task_id)
         self.assertEqual(
             first_consumption["consumption"]["usage"]["total_tokens"],
-            42,
+            70,
         )
-        summary = json.loads(
-            (output_dir / "summary.json").read_text(encoding="utf-8")
-        )
+        summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
         self.assertNotIn("records", summary)
         self.assertEqual(summary["summary"]["requested_count"], 2)
         self.assertEqual(summary["metadata"]["model"], "scripted-model")
@@ -295,8 +306,7 @@ class RolloutRunnerTest(unittest.TestCase):
         self.assertEqual(payload["rollout_id"], "cli_contract")
         self.assertEqual(payload["summary"]["strict_success_count"], 1)
         self.assertTrue(
-            (self.directory / "cli-rollouts" / "cli_contract" / "runs.jsonl")
-            .is_file()
+            (self.directory / "cli-rollouts" / "cli_contract" / "runs.jsonl").is_file()
         )
 
     def test_cli_accepts_full_selection_without_count(self) -> None:
@@ -312,22 +322,35 @@ class RolloutRunnerTest(unittest.TestCase):
                     harness=self.harness,
                 ),
             ).run_split(split)
-            self.assertEqual(report.summary.requested_count,
-                             len(self.harness.list_task_ids(split)))
+            self.assertEqual(
+                report.summary.requested_count, len(self.harness.list_task_ids(split))
+            )
             self.assertEqual(report.split, split)
             self.assertIsNone(report.seed)
 
     def test_cli_test_selection_runs_all_selected_tasks(self) -> None:
         output = io.StringIO()
-        with patch("src.harness.cli.DeepSeekProvider", side_effect=lambda **kwargs:
-                   successful_provider(TARGET_ASIN, "白色")), redirect_stdout(output):
-            code = main([
-                "rollout", "--split", "test",
-                "--products-path", str(self.products_path),
-                "--index-path", str(self.index_path),
-                "--output-root", str(self.directory / "cli-test"),
-                "--no-env-file",
-            ])
+        with (
+            patch(
+                "src.harness.cli.DeepSeekProvider",
+                side_effect=lambda **kwargs: successful_provider(TARGET_ASIN, "白色"),
+            ),
+            redirect_stdout(output),
+        ):
+            code = main(
+                [
+                    "rollout",
+                    "--split",
+                    "test",
+                    "--products-path",
+                    str(self.products_path),
+                    "--index-path",
+                    str(self.index_path),
+                    "--output-root",
+                    str(self.directory / "cli-test"),
+                    "--no-env-file",
+                ]
+            )
         payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(payload["summary"]["requested_count"], 2)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import sys
 from typing import Any, Sequence
@@ -16,7 +17,14 @@ from .agent import (
     RolloutError,
     RolloutRunner,
     load_agent_skill,
+    AgentProfile,
+    UserProfile,
+    RuntimeConfig,
+    AgentRunResult,
+    UserReply,
+    PreferenceStore,
 )
+from .agent.artifacts import replay_run, write_run_artifacts
 from .catalog import CatalogError
 from .env import DotEnvError, load_dotenv
 from .harness import HarnessError, ShoppingHarness
@@ -27,6 +35,8 @@ from .providers import (
     ProviderError,
 )
 from .tasks import TaskStoreError
+from .interactive import InteractiveHarness
+from .sources import JsonProductSource, HttpProductSource
 
 
 DEFAULT_PRODUCTS_PATH = Path("data/fine_items_eval_train_all.json")
@@ -44,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run Shopping Harness agents and deterministic rollouts.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    from .episodes.cli import register
+    register(subparsers)
+    from .experiments.cli import register as register_experiments
+    register_experiments(subparsers)
     common = argparse.ArgumentParser(add_help=False)
     _add_common_arguments(common)
 
@@ -54,10 +68,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--task-id", required=True)
     run_parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        help="New directory for the versioned audit bundle.",
+    )
+    run_parser.add_argument(
         "--output",
         type=Path,
         help="Write the result JSON to a new file instead of stdout.",
     )
+
+    chat_parser = subparsers.add_parser(
+        "chat", parents=[common], help="Start an unlabelled interactive shopping task."
+    )
+    chat_parser.add_argument("--query", required=True)
+    _add_interactive_arguments(chat_parser)
+    chat_parser.add_argument("--preferences-db", type=Path)
+    chat_parser.add_argument("--profile-id")
+    resume_parser = subparsers.add_parser(
+        "resume",
+        parents=[common],
+        help="Resume a waiting interactive audit bundle with a real user reply.",
+    )
+    resume_parser.add_argument("--run-dir", type=Path, required=True)
+    resume_parser.add_argument("--reply", required=True)
+    resume_parser.add_argument(
+        "--replace-constraint-id",
+        action="append",
+        default=[],
+        dest="replace_constraint_ids",
+    )
+    _add_interactive_arguments(resume_parser)
+
+    prefs = subparsers.add_parser(
+        "preferences", help="Explicitly view, set or remove long-term user preferences."
+    )
+    prefs.add_argument("operation", choices=("show", "set", "remove", "history"))
+    prefs.add_argument("--db", type=Path, required=True)
+    prefs.add_argument("--profile-id", required=True)
+    prefs.add_argument("--name")
+    prefs.add_argument("--value")
+    prefs.add_argument("--expected-revision", type=_non_negative_int)
 
     rollout_parser = subparsers.add_parser(
         "rollout",
@@ -103,10 +154,77 @@ def build_parser() -> argparse.ArgumentParser:
         "--rollout-id",
         help="Optional stable artifact directory name; must not already exist.",
     )
+    replay_parser = subparsers.add_parser(
+        "replay", help="Validate an audit bundle and reconstruct public state offline."
+    )
+    replay_parser.add_argument("--run-dir", type=Path, required=True)
+    subparsers.add_parser(
+        "schema", help="Print versioned runtime JSON schemas without starting a model."
+    )
+    vector_parser = subparsers.add_parser(
+        "vector-index", help="Build a new semantic index from public product fields."
+    )
+    vector_source = vector_parser.add_mutually_exclusive_group(required=True)
+    vector_source.add_argument("--source-json", type=Path)
+    vector_source.add_argument("--index-path", type=Path)
+    vector_parser.add_argument("--output", type=Path, required=True)
+    vector_parser.add_argument("--batch-size", type=_positive_int, default=64)
+    vector_parser.add_argument("--env-file", type=Path)
+    vector_parser.add_argument("--no-env-file", action="store_true")
+    _add_embedding_arguments(vector_parser)
     return parser
 
 
+def _add_interactive_arguments(parser):
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--source-json", type=Path, help="Public ProductDetail JSON array."
+    )
+    source.add_argument(
+        "--source-url", help="Configured public product gateway base URL."
+    )
+    parser.add_argument("--source-id", default="public-products")
+    parser.add_argument("--currency", help="Explicit source currency, e.g. CNY.")
+    parser.add_argument(
+        "--source-key-env",
+        help="Environment variable holding the gateway bearer credential.",
+    )
+    parser.add_argument("--source-timeout", type=_positive_float, default=15.0)
+    parser.add_argument(
+        "--source-search-methods", nargs="+", choices=("bm25", "vector"),
+        default=None, help="HTTP gateway's explicitly supported methods (default: bm25).",
+    )
+    parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        required=True,
+        help="New audit directory; waiting runs include checkpoint.json.",
+    )
+
+
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agent-mode", choices=("single", "multi"), default=None,
+        help="multi uses planner/executor/observer; new chat tasks default to multi.",
+    )
+    parser.add_argument(
+        "--vector-index", type=Path,
+        help="Prepared vector index for this exact SQLite catalog or public JSON file.",
+    )
+    _add_embedding_arguments(parser)
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        help="RuntimeConfig JSON: action/search/token/time/context budgets.",
+    )
+    parser.add_argument(
+        "--agent-profile", type=Path, help="AgentProfile JSON: identity and objective."
+    )
+    parser.add_argument(
+        "--user-profile",
+        type=Path,
+        help="UserProfile JSON: explicit background preferences.",
+    )
     environment = parser.add_mutually_exclusive_group()
     environment.add_argument(
         "--env-file",
@@ -158,10 +276,87 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-model-turns", type=_positive_int, default=40)
 
 
+def _add_embedding_arguments(parser):
+    parser.add_argument("--embedding-model", help="Embedding model, or EMBEDDING_MODEL.")
+    parser.add_argument(
+        "--embedding-base-url",
+        help="Embedding API base URL ending in /v1, or EMBEDDING_BASE_URL.",
+    )
+    parser.add_argument("--embedding-key-env", default="EMBEDDING_API_KEY")
+    parser.add_argument("--embedding-timeout", type=_positive_float, default=30.0)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "schema":
+            from .agent import contracts
+
+            names = (
+                "AgentProfile",
+                "UserProfile",
+                "TaskProfile",
+                "SearchPlan",
+                "PlanUpdate",
+                "EvidenceAssessment",
+                "EvidenceBatch",
+                "ReadEvidence",
+                "CompareProducts",
+                "VerifySelection",
+                "ActionProposal",
+                "AgentSubmission",
+                "WorkingMemory",
+                "AgentAction",
+                "AgentObservation",
+                "RuntimeConfig",
+                "AgentEvent",
+                "AgentRunResult",
+                "AskUser",
+                "UserReply",
+                "UserMessage",
+                "PendingQuestion",
+                "ReviewProgress",
+            )
+            print(
+                json.dumps(
+                    {
+                        name: getattr(contracts, name).model_json_schema()
+                        for name in names
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if args.command == "episodes":
+            from .episodes.cli import handle
+            return handle(args)
+        if args.command == "experiments":
+            from .experiments.cli import handle
+            return handle(args)
+        if args.command == "replay":
+            print(json.dumps(replay_run(args.run_dir), ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "preferences":
+            return _preferences_command(args)
+        if args.command == "vector-index":
+            load_dotenv(args.env_file, disabled=args.no_env_file)
+            return _vector_index_command(args)
+        if args.command in {"chat", "resume"}:
+            load_dotenv(args.env_file, disabled=args.no_env_file)
+            return _interactive_command(args)
+        args.runtime_config = _load_contract(args.runtime_config, RuntimeConfig)
+        if args.agent_mode is not None:
+            args.runtime_config = args.runtime_config.model_copy(
+                update={"agent_mode": args.agent_mode}
+            )
+        args.agent_profile = _load_contract(args.agent_profile, AgentProfile)
+        args.user_profile = _load_contract(args.user_profile, UserProfile)
+        if args.runtime_config.interaction_mode != "offline":
+            raise CLIError(
+                "run/rollout use offline evaluation; use chat for interactive tasks"
+            )
         args.loaded_env_file = load_dotenv(
             args.env_file,
             disabled=args.no_env_file,
@@ -191,12 +386,170 @@ def entrypoint() -> None:
     raise SystemExit(main())
 
 
+def _preferences_command(args):
+    if args.operation in {"set", "remove"} and not args.name:
+        raise CLIError("--name is required for set/remove")
+    if args.operation == "set" and args.value is None:
+        raise CLIError("--value is required for set")
+    store = PreferenceStore(args.db)
+    if args.operation == "set":
+        store.set(
+            args.profile_id,
+            args.name,
+            args.value,
+            expected_revision=args.expected_revision,
+        )
+    elif args.operation == "remove":
+        store.remove(
+            args.profile_id, args.name, expected_revision=args.expected_revision
+        )
+    if args.operation == "history":
+        payload = store.history(args.profile_id)
+    else:
+        profile, revision = store.load(args.profile_id)
+        payload = {"profile": profile.model_dump(mode="json"), "revision": revision}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _interactive_command(args):
+    if args.artifacts_dir.expanduser().exists():
+        raise CLIError("refusing to overwrite existing audit directory")
+    paused = None
+    if args.command == "resume":
+        replay_run(args.run_dir)
+        paused = AgentRunResult.model_validate_json(
+            (args.run_dir / "checkpoint.json").read_text(encoding="utf-8")
+        )
+        config = (
+            _load_contract(args.runtime_config, RuntimeConfig)
+            if args.runtime_config
+            else RuntimeConfig.model_validate(paused.manifest["config"])
+        )
+        profile = (
+            _load_contract(args.agent_profile, AgentProfile)
+            if args.agent_profile
+            else paused.profile
+        )
+        user = (
+            _load_contract(args.user_profile, UserProfile)
+            if args.user_profile
+            else paused.user_profile
+        )
+        max_steps = paused.session.state.max_steps
+        args.max_model_turns = paused.manifest["max_model_turns"]
+        args.model = paused.model
+        args.tool_choice = paused.manifest["tool_choice"]
+        if args.provider_parameters is None:
+            if _has_redacted_value(paused.manifest["provider_parameters"]):
+                raise CLIError(
+                    "checkpoint contains redacted provider parameters; supply original --provider-parameters"
+                )
+            args.provider_parameters = paused.manifest["provider_parameters"]
+    else:
+        config = _load_contract(args.runtime_config, RuntimeConfig).model_copy(
+            update={"interaction_mode": "interactive"}
+        )
+        profile = _load_contract(args.agent_profile, AgentProfile)
+        if args.preferences_db:
+            if not args.profile_id or args.user_profile:
+                raise CLIError(
+                    "--preferences-db requires --profile-id and cannot be combined with --user-profile"
+                )
+            user, _ = PreferenceStore(args.preferences_db).load(args.profile_id)
+        else:
+            if args.profile_id:
+                raise CLIError("--profile-id requires --preferences-db")
+            user = _load_contract(args.user_profile, UserProfile)
+        max_steps = args.max_steps
+    if args.agent_mode is not None:
+        config = config.model_copy(update={"agent_mode": args.agent_mode})
+    if args.source_key_env and not os.environ.get(args.source_key_env):
+        raise CLIError("configured source credential environment variable is empty")
+    if args.source_url and args.vector_index:
+        raise CLIError("--vector-index is for local sources; configure vector search on the HTTP gateway")
+    if args.source_json and args.source_search_methods is not None:
+        raise CLIError("--source-search-methods applies only to an HTTP gateway")
+    source = (
+        JsonProductSource(
+            args.source_json, source_id=args.source_id, currency=args.currency,
+            **_vector_options(args),
+        )
+        if args.source_json
+        else HttpProductSource(
+            args.source_url,
+            source_id=args.source_id,
+            currency=args.currency,
+            api_key=(
+                os.environ.get(args.source_key_env) if args.source_key_env else None
+            ),
+            timeout=args.source_timeout,
+            search_methods=tuple(args.source_search_methods or ["bm25"]),
+        )
+    )
+    with InteractiveHarness(source, default_max_steps=max_steps) as harness:
+        runner = AgentRunner(
+            provider=_build_provider(args),
+            harness=harness,
+            skill_dir=args.skill_dir,
+            config=config,
+            profile=profile,
+            user_profile=user,
+            max_model_turns=args.max_model_turns,
+            tool_choice=args.tool_choice,
+        )
+        result = (
+            runner.resume(
+                paused,
+                UserReply(
+                    text=args.reply, replace_constraint_ids=args.replace_constraint_ids
+                ),
+            )
+            if paused
+            else runner.run_query(args.query, max_steps=max_steps)
+        )
+        directory = write_run_artifacts(result, args.artifacts_dir)
+    recommendations = next(
+        (
+            step.arguments["recommendations"]
+            for step in reversed(result.session.history)
+            if step.tool_name == "submit_recommendations" and step.status == "success"
+        ),
+        [],
+    )
+    print(
+        json.dumps(
+            {
+                "status": result.status,
+                "terminal_reason": result.terminal_reason,
+                "artifacts_dir": str(directory),
+                "session_id": result.session_id,
+                "pending_question": (
+                    result.pending_question.model_dump(mode="json")
+                    if result.pending_question
+                    else None
+                ),
+                "recommendations": recommendations,
+                "evaluation": None,
+                "error": result.error_message,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if result.status in {"completed", "waiting_for_user"} else 1
+
+
 def _run_command(args: argparse.Namespace) -> int:
+    for output in (args.output, args.artifacts_dir):
+        if output is not None and output.expanduser().exists():
+            raise CLIError(f"refusing to overwrite existing output: {output}")
     skill = load_agent_skill(args.skill_dir)
     with ShoppingHarness(
         products_path=args.products_path,
         index_path=args.index_path,
         default_max_steps=args.max_steps,
+        **_vector_options(args),
     ) as harness:
         result = AgentRunner(
             provider=_build_provider(args),
@@ -204,7 +557,12 @@ def _run_command(args: argparse.Namespace) -> int:
             skill=skill,
             max_model_turns=args.max_model_turns,
             tool_choice=args.tool_choice,
+            config=args.runtime_config,
+            profile=args.agent_profile,
+            user_profile=args.user_profile,
         ).run(args.task_id, max_steps=args.max_steps)
+    if args.artifacts_dir is not None:
+        write_run_artifacts(result, args.artifacts_dir)
     payload = result.model_dump_json(indent=2)
     if args.output is None:
         print(payload)
@@ -226,7 +584,9 @@ def _rollout_command(
         products_path=args.products_path,
         index_path=args.index_path,
         default_max_steps=args.max_steps,
+        **_vector_options(args),
     ) as harness:
+
         def runner_factory() -> AgentRunner:
             return AgentRunner(
                 provider=_build_provider(args),
@@ -234,6 +594,9 @@ def _rollout_command(
                 skill=skill,
                 max_model_turns=args.max_model_turns,
                 tool_choice=args.tool_choice,
+                config=args.runtime_config,
+                profile=args.agent_profile,
+                user_profile=args.user_profile,
             )
 
         rollout = RolloutRunner(
@@ -284,6 +647,55 @@ def _build_provider(args: argparse.Namespace) -> DeepSeekProvider:
     )
 
 
+def _build_embedding_provider(args):
+    from ..data.search_vector import OpenAIEmbeddingProvider
+
+    model = args.embedding_model or os.environ.get("EMBEDDING_MODEL")
+    base_url = args.embedding_base_url or os.environ.get("EMBEDDING_BASE_URL")
+    if not model or not base_url:
+        raise CLIError(
+            "vector search requires --embedding-model and --embedding-base-url "
+            "(or EMBEDDING_MODEL and EMBEDDING_BASE_URL); use the index's original model"
+        )
+    return OpenAIEmbeddingProvider(
+        model=model, base_url=base_url,
+        api_key=os.environ.get(args.embedding_key_env), timeout=args.embedding_timeout,
+    )
+
+
+def _vector_options(args):
+    if args.vector_index is None:
+        return {}
+    return {
+        "vector_index_path": args.vector_index,
+        "embedding_provider": _build_embedding_provider(args),
+    }
+
+
+def _vector_index_command(args):
+    from ..data.search_vector import build_vector_index, build_json_vector_index
+
+    if args.output.expanduser().exists():
+        raise CLIError("refusing to overwrite an existing vector index")
+    provider = _build_embedding_provider(args)
+    builder = build_json_vector_index if args.source_json else build_vector_index
+    manifest = builder(
+        args.source_json or args.index_path, args.output, provider,
+        batch_size=args.batch_size,
+    )
+    print(json.dumps({"output": str(args.output.resolve()), "manifest": manifest},
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
+def _has_redacted_value(value):
+    if isinstance(value, dict):
+        return any(_has_redacted_value(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_redacted_value(v) for v in value)
+    return value == "***"
+
+
 def _rollout_metadata(
     args: argparse.Namespace,
     harness_manifest: dict[str, Any],
@@ -292,6 +704,9 @@ def _rollout_metadata(
     parameters = dict(args.provider_parameters or {})
     parameters.setdefault("temperature", args.temperature)
     return {
+        "runtime_config": args.runtime_config.model_dump(mode="json"),
+        "agent_profile": args.agent_profile.model_dump(mode="json"),
+        "user_profile": args.user_profile.model_dump(mode="json"),
         "provider": args.provider,
         "model": args.model,
         "base_url": args.base_url,
@@ -315,6 +730,12 @@ def _write_new_file(path: Path, text: str) -> None:
             handle.write(text)
     except FileExistsError as exc:
         raise CLIError(f"refusing to overwrite output file: {resolved}") from exc
+
+
+def _load_contract(path, model):
+    if path is None:
+        return model()
+    return model.model_validate_json(path.expanduser().read_text(encoding="utf-8"))
 
 
 def _positive_int(value: str) -> int:

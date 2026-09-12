@@ -1,0 +1,8 @@
+{
+  "profile_id": "example-shopper",
+  "locale": "zh-CN",
+  "preferences": [
+    {"name": "delivery", "value": "有明确到货时间的商品"},
+    {"name": "style", "value": "简洁设计"}
+  ]
+}

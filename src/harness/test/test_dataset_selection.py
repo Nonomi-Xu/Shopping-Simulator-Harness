@@ -10,7 +10,7 @@ class DatasetSelectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "products.json"
             products = []
-            for index in range(25):
+            for index in range(505):
                 asin = f"A{index:03d}"
                 product = {
                     "asin": asin,
@@ -24,9 +24,9 @@ class DatasetSelectionTest(unittest.TestCase):
             store = TaskStore(path)
             all_ids = store.list_task_ids("all")
             test_ids = store.list_task_ids("test")
-            self.assertEqual(len(all_ids), 25)
-            self.assertEqual(len(set(all_ids)), 25)
-            self.assertEqual(len(test_ids), 10)
+            self.assertEqual(len(all_ids), 505)
+            self.assertEqual(len(set(all_ids)), 505)
+            self.assertEqual(len(test_ids), 500)
             self.assertTrue(set(test_ids) < set(all_ids))
             self.assertEqual(test_ids, TaskStore(path).list_task_ids("test"))
             self.assertEqual(test_ids, [x for x in all_ids if x in set(test_ids)])
@@ -40,7 +40,7 @@ class DatasetSelectionTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     store.list_task_ids(legacy)
             with self.assertRaises(ValueError):
-                store.sample_task_ids("test", 11, seed=42)
+                store.sample_task_ids("test", 501, seed=42)
             path.write_text(json.dumps(products[:2]), encoding="utf-8")
             small = TaskStore(path)
             self.assertEqual(small.list_task_ids("test"), small.list_task_ids("all"))

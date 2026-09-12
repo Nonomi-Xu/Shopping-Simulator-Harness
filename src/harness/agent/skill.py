@@ -79,9 +79,7 @@ def load_agent_skill(skill_dir: str | Path | None = None) -> AgentSkill:
     ]
     for path, text in reference_texts:
         relative_name = path.relative_to(directory).as_posix()
-        prompt_parts.append(
-            f"# Loaded reference: {relative_name}\n\n{text.strip()}"
-        )
+        prompt_parts.append(f"# Loaded reference: {relative_name}\n\n{text.strip()}")
 
     digest = hashlib.sha256()
     for path, text in [(entrypoint, entry_text), *reference_texts]:
@@ -129,9 +127,7 @@ def _parse_frontmatter(text: str, path: Path) -> tuple[dict[str, str], str]:
             continue
         key, separator, value = line.partition(":")
         if not separator or not key.strip() or not value.strip():
-            raise AgentSkillError(
-                f"unsupported frontmatter line in {path}: {line}"
-            )
+            raise AgentSkillError(f"unsupported frontmatter line in {path}: {line}")
         metadata[key.strip()] = value.strip()
 
     for required in ("name", "description"):
@@ -159,8 +155,6 @@ def _resolve_references(directory: Path, body: str) -> list[Path]:
                 f"Agent Skill reference escapes its directory: {relative_name}"
             ) from exc
         if not candidate.is_file():
-            raise AgentSkillError(
-                f"Agent Skill reference not found: {relative_name}"
-            )
+            raise AgentSkillError(f"Agent Skill reference not found: {relative_name}")
         references.append(candidate)
     return references

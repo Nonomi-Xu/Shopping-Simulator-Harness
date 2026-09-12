@@ -112,6 +112,8 @@ class ScriptedProvider:
         output = self.outputs.pop(0)
         if isinstance(output, ProviderAPIError):
             raise output
+        if callable(output):
+            return output(messages)
         return output
 
 
@@ -141,6 +143,28 @@ def tool_turn(
             total_tokens=input_tokens + output_tokens,
         ),
     )
+
+
+def requirement_turn(color: str):
+    return tool_turn("plan", "update_plan", {
+        "constraints": [{
+            "constraint_id": "color", "description": f"需要{color}",
+            "priority": "hard", "source": "user_query", "source_quote": color,
+        }],
+        "queries": [f"{color}冰箱"], "change_summary": "提取公开颜色要求",
+    })
+
+
+def color_evidence_turn(asin: str, color: str):
+    def respond(messages):
+        observation = json.loads(messages[-1].content)
+        return tool_turn("color-evidence", "record_evidence_batch", {"assessments": [{
+            "asin": asin, "constraint_id": "color", "status": "satisfied",
+            "observation_id": observation["observation_id"],
+            "field_path": "/customization_options/颜色/0/value", "quote": color,
+            "explanation": "详情中的可选颜色符合要求",
+        }]})
+    return respond
 
 
 class AgentRunnerTest(unittest.TestCase):
@@ -192,6 +216,7 @@ class AgentRunnerTest(unittest.TestCase):
     def test_complete_agent_loop_submits_and_aggregates_usage(self) -> None:
         provider = ScriptedProvider(
             [
+                requirement_turn("白色"),
                 tool_turn(
                     "call-search",
                     "search_products",
@@ -202,6 +227,7 @@ class AgentRunnerTest(unittest.TestCase):
                     "get_product",
                     {"asin": TARGET_ASIN},
                 ),
+                color_evidence_turn(TARGET_ASIN, "白色"),
                 tool_turn(
                     "call-submit",
                     "submit_recommendations",
@@ -227,24 +253,15 @@ class AgentRunnerTest(unittest.TestCase):
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.terminal_reason, "submitted")
-        self.assertEqual(result.model_turn_count, 3)
+        self.assertEqual(result.model_turn_count, 5)
         self.assertEqual(result.tool_call_count, 3)
         self.assertTrue(result.session.evaluation.strict_success)
-        self.assertEqual(result.usage.total_tokens, 42)
+        self.assertEqual(result.usage.total_tokens, 70)
         self.assertEqual(
             [message.role for message in result.messages],
-            [
-                "system",
-                "user",
-                "assistant",
-                "tool",
-                "assistant",
-                "tool",
-                "assistant",
-                "tool",
-            ],
+            ["system", "user", *(["assistant", "tool"] * 5)],
         )
-        self.assertEqual(len(provider.requests), 3)
+        self.assertEqual(len(provider.requests), 5)
         self.assertEqual(provider.requests[0]["tool_choice"], "required")
         self.assertEqual(
             provider.requests[0]["parameters"],

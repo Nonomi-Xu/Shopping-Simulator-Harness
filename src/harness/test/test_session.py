@@ -133,7 +133,7 @@ class ShoppingSessionTest(unittest.TestCase):
 
         self.assertEqual(session.public_task.query, "寻找一款白色测试商品")
         self.assertEqual(task_store.private_fact_reads, 0)
-        self.assertEqual(session.state.session_version, "shopping-session-v1")
+        self.assertEqual(session.state.session_version, "shopping-session-v2")
         self.assertEqual(session.state.status, "active")
         self.assertEqual(session.state.step_count, 0)
         self.assertEqual(session.history, [])
@@ -203,7 +203,8 @@ class ShoppingSessionTest(unittest.TestCase):
         self.assertEqual(session.state.terminal_reason, "submitted")
         self.assertEqual(task_store.private_fact_reads, 1)
         self.assertTrue(session.evaluation.strict_success)
-        self.assertEqual(step.observation["reward"], 1.0)
+        self.assertEqual(step.observation, {"submitted": True})
+        self.assertEqual(session.evaluation.reward, 1.0)
 
         with self.assertRaises(SessionTerminatedError) as raised:
             session.dispatch(SEARCH_PRODUCTS, {"query": "再次搜索"})
@@ -247,8 +248,9 @@ class ShoppingSessionTest(unittest.TestCase):
         )
 
         self.assertEqual(step.status, "success")
-        self.assertEqual(step.observation["terminal_reason"], "invalid_submission")
-        self.assertFalse(step.observation["reward_valid"])
+        self.assertEqual(step.observation, {"submitted": True})
+        self.assertEqual(session.evaluation.terminal_reason, "invalid_submission")
+        self.assertFalse(session.evaluation.reward_valid)
         self.assertEqual(session.state.terminal_reason, "submitted")
         self.assertEqual(task_store.private_fact_reads, 1)
 

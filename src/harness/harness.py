@@ -28,7 +28,7 @@ from .session import DEFAULT_MAX_STEPS, ShoppingSession
 from .tasks import TaskStore
 
 
-HARNESS_VERSION = "shopping-harness-v1"
+HARNESS_VERSION = "shopping-harness-v2"
 
 
 class HarnessError(RuntimeError):

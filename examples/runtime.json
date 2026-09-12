@@ -1,0 +1,11 @@
+{
+  "max_actions": 40,
+  "max_searches": 6,
+  "max_repeated_actions": 2,
+  "max_total_tokens": null,
+  "max_duration_seconds": null,
+  "context_max_chars": 80000,
+  "recent_turns": 4,
+  "memory_candidate_limit": 10,
+  "action_proposal_limit": 5
+}

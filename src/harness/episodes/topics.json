@@ -1,0 +1,17 @@
+{
+  "budget": ["预算", "多少钱", "价位", "价格", "花多少", "budget", "price"],
+  "category": ["品类", "类别", "买什么", "category"],
+  "brand": ["品牌", "牌子", "厂商", "brand", "apple", "mac"],
+  "use_case": ["用途", "场景", "用来", "做什么", "use case"],
+  "ram": ["内存", "ram", "memory"],
+  "weight": ["重量", "多重", "轻便", "便携", "weight"],
+  "battery": ["续航", "电池", "battery"],
+  "color": ["颜色", "配色", "color"],
+  "size": ["尺寸", "尺码", "大小", "鞋码", "size"],
+  "material": ["材质", "材料", "material"],
+  "compatibility": ["兼容", "型号", "适配", "compatib"],
+  "audience": ["年龄", "几岁", "人群", "给谁"],
+  "power": ["功率", "瓦", "power"],
+  "function": ["功能", "特性", "feature"],
+  "flavor": ["口味", "味道", "flavor"]
+}

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .constraints import Predicate
 
 
 TaskSplit = Literal["all", "test"]
@@ -28,6 +29,7 @@ class ProductOption(BaseModel):
     is_available: bool = True
     asin: str | None = None
 
+
 class ProductVariant(BaseModel):
     options: dict[str, str]
     price: float | None = None
@@ -49,6 +51,13 @@ class ProductDetail(BaseModel):
     variant_combinations: list[ProductVariant] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
 
+
+class MatchSnippet(BaseModel):
+    field_path: str
+    text: str
+    truncated: bool = False
+
+
 class ProductSummary(BaseModel):
     asin: str
     title: str
@@ -58,6 +67,51 @@ class ProductSummary(BaseModel):
     price_max: float | None = None
     bm25_score: float
     rank: int
+    match_snippets: list[MatchSnippet] = Field(default_factory=list)
+
+
+class SearchFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    category: str | None = Field(default=None, min_length=1, max_length=200)
+    brand: str | None = Field(default=None, min_length=1, max_length=200)
+    min_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    max_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    include_unknown_price: bool = True
+    predicates: list[Predicate] = Field(default_factory=list, max_length=60)
+
+    @model_validator(mode="after")
+    def ordered_prices(self):
+        if (
+            self.min_price is not None
+            and self.max_price is not None
+            and self.min_price > self.max_price
+        ):
+            raise ValueError("min_price must not exceed max_price")
+        return self
+
+
+class SearchPage(BaseModel):
+    offset: int = 0
+    next_offset: int | None = None
+    has_more: bool = False
+    total_results: int | None = None
+    price_scope: str = "product_range_overlap_not_selected_variant"
+
+
+ProductField = Literal[
+    "title",
+    "category",
+    "brand",
+    "price_min",
+    "price_max",
+    "pricing",
+    "description",
+    "attributes",
+    "customization_options",
+    "variant_combinations",
+    "images",
+]
+
 
 class PublicTask(BaseModel):
     """The complete task payload that may be shown to an actor."""
@@ -96,7 +150,11 @@ class SearchProductsAction(BaseModel):
     )
 
     query: str = Field(min_length=1)
+    method: Literal["bm25"] = "bm25"
     limit: int = Field(default=20, ge=1, le=50)
+    filters: SearchFilters = Field(default_factory=SearchFilters)
+    offset: int = Field(default=0, ge=0, strict=True)
+    exclude_asins: list[str] = Field(default_factory=list, max_length=200)
 
 
 class GetProductAction(BaseModel):
@@ -107,6 +165,7 @@ class GetProductAction(BaseModel):
     )
 
     asin: str = Field(min_length=1)
+    fields: list[ProductField] | None = Field(default=None, min_length=1, max_length=11)
 
 
 class RecommendationItem(BaseModel):
@@ -155,9 +214,7 @@ class EvaluationResult(BaseModel):
     terminal_reason: EvaluationTerminalReason
     matched_rank: int | None = Field(default=None, ge=1)
     submission_failures: list[str] = Field(default_factory=list)
-    recommendations: list[RecommendationEvaluation] = Field(
-        default_factory=list
-    )
+    recommendations: list[RecommendationEvaluation] = Field(default_factory=list)
 
 
 class SessionState(BaseModel):
@@ -187,6 +244,8 @@ class SessionStep(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     status: SessionStepStatus
     observation: dict[str, Any] | list[dict[str, Any]] | None = None
+    search_page: SearchPage | None = None
+    source: dict[str, Any] | None = None
     error_code: str | None = None
     message: str | None = None
     terminated: bool
@@ -194,7 +253,11 @@ class SessionStep(BaseModel):
 
 
 class SessionSnapshot(BaseModel):
-    """Serializable public view of one managed Harness session."""
+    """Administrative snapshot. Only public_task/state/history are actor-safe.
+
+    evaluation is an evaluator-only audit field; never send an entire snapshot
+    into model context or working memory.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

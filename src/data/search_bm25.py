@@ -32,14 +32,17 @@ DEFAULT_FIELD_WEIGHTS = {
 }
 FIELDS = tuple(DEFAULT_FIELD_WEIGHTS)
 
+
 class SearchIndexError(RuntimeError):
     """The Environment v2 index is absent, incompatible, or corrupted."""
+
 
 @dataclass(frozen=True)
 class SearchHit:
     asin: str
     score: float
     rank: int
+
 
 def search_tokens(value: object) -> tuple[str, ...]:
     """返回稳定、有序的搜索词元，包括中文二元组。"""
@@ -53,23 +56,19 @@ def search_tokens(value: object) -> tuple[str, ...]:
         if len(run) == 1:
             tokens.append(run)
         else:
-            tokens.extend(
-                run[index : index + 2]
-                for index in range(len(run) - 1)
-            )
+            tokens.extend(run[index : index + 2] for index in range(len(run) - 1))
 
     # 提取英文、数字和商品型号
     tokens.extend(_LATIN_OR_NUMBER.findall(text))
 
     # 删除空字符串和重复项，同时保持顺序
-    return tuple(
-        dict.fromkeys(token for token in tokens if token)
-    )
+    return tuple(dict.fromkeys(token for token in tokens if token))
+
 
 def _flatten(value: object) -> list[str]:
-    '''
+    """
     把嵌套的数据结构递归展开成一个一维字符串列表。
-    '''
+    """
     if value is None:
         return []
     if isinstance(value, dict):
@@ -85,6 +84,7 @@ def _flatten(value: object) -> list[str]:
         return flattened
     return [str(value)]
 
+
 def product_fields(product: dict) -> dict[str, str]:
     """Extract the frozen v2 search document without task or reward fields."""
     title = str(product.get("title") or product.get("Title") or "")
@@ -93,7 +93,9 @@ def product_fields(product: dict) -> dict[str, str]:
     attributes = " ".join(
         _flatten(product.get("attribute") or product.get("Attributes") or [])
     )
-    options = " ".join(_flatten(product.get("customization_options") or product.get("options") or {}))
+    options = " ".join(
+        _flatten(product.get("customization_options") or product.get("options") or {})
+    )
     bullets = " ".join(
         _flatten(
             product.get("small_description")
@@ -113,6 +115,7 @@ def product_fields(product: dict) -> dict[str, str]:
         "bullets": bullets,
     }
 
+
 def _tokenized(value: object) -> str:
     return " ".join(search_tokens(value))
 
@@ -124,6 +127,7 @@ def sha256_file(path: str | Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
+
 def _validated_weights(weights: dict[str, float]) -> dict[str, float]:
     if set(weights) != set(FIELDS):
         raise ValueError(f"field weights must contain exactly: {', '.join(FIELDS)}")
@@ -134,6 +138,7 @@ def _validated_weights(weights: dict[str, float]) -> dict[str, float]:
             raise ValueError(f"weight for {field} must be finite and positive")
         result[field] = value
     return result
+
 
 def build_index(
     products,
@@ -201,10 +206,7 @@ def build_index(
                 """,
                 (
                     asin,
-                    *(
-                        _tokenized(fields[field])
-                        for field in FIELDS
-                    ),
+                    *(_tokenized(fields[field]) for field in FIELDS),
                 ),
             )
 
@@ -303,24 +305,35 @@ def _fts_query(tokens: tuple[str, ...]) -> str:
     # still keeps FTS syntax separate from user-provided text.
     return " OR ".join(f'"{token}"' for token in tokens)
 
+
 class MultiFieldBM25Searcher:
     """Read-only, deterministic search interface used by SimServer."""
 
-    def __init__(self, index_path: str | Path, *, expected_product_sha256: str | None = None):
+    def __init__(
+        self, index_path: str | Path, *, expected_product_sha256: str | None = None
+    ):
         self.index_path = Path(index_path).resolve()
         if not self.index_path.is_file():
-            raise SearchIndexError(
-                f"Environment index not found: {self.index_path}. "
-            )
+            raise SearchIndexError(f"Environment index not found: {self.index_path}. ")
         uri = f"file:{self.index_path}?mode=ro"
         self._connection = sqlite3.connect(uri, uri=True, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        from .product_facts import sqlite_predicates
+        self._connection.create_function("public_predicates", 9, sqlite_predicates, deterministic=True)
+        self._connection.create_function(
+            "normalize_public",
+            1,
+            lambda value: normalize_query(value or ""),
+            deterministic=True,
+        )
         try:
             row = self._connection.execute("SELECT payload FROM manifest").fetchone()
             self.manifest = json.loads(row["payload"])
         except Exception as exc:
             self._connection.close()
-            raise SearchIndexError(f"invalid Environment v2 index manifest: {exc}") from exc
+            raise SearchIndexError(
+                f"invalid Environment v2 index manifest: {exc}"
+            ) from exc
         if self.manifest.get("search_version") != SEARCH_VERSION:
             raise SearchIndexError(
                 f"search version mismatch: {self.manifest.get('search_version')!r}"
@@ -331,10 +344,20 @@ class MultiFieldBM25Searcher:
             expected_product_sha256 is not None
             and self.manifest.get("product_data_sha256") != expected_product_sha256
         ):
-            raise SearchIndexError("product data SHA-256 does not match the search index")
+            raise SearchIndexError(
+                "product data SHA-256 does not match the search index"
+            )
         self.weights = _validated_weights(self.manifest["field_weights"])
 
-    def search(self, query: object, k: int = 150) -> list[SearchHit]:
+    def search(
+        self,
+        query: object,
+        k: int = 150,
+        *,
+        filters: dict | None = None,
+        offset: int = 0,
+        exclude_asins: list[str] | None = None,
+    ) -> list[SearchHit]:
         tokens = search_tokens(query)
         if not tokens or int(k) <= 0:
             return []
@@ -343,15 +366,29 @@ class MultiFieldBM25Searcher:
         # appending the weights for title through bullets.
         weight_values = [0.0, *(self.weights[field] for field in FIELDS)]
         weight_placeholders = ", ".join("?" for _ in weight_values)
+        where, parameters = _search_where(tokens, filters, exclude_asins)
         rows = self._connection.execute(
-            f"SELECT asin, bm25(products, {weight_placeholders}) AS score FROM products "
-            "WHERE products MATCH ? ORDER BY score ASC, asin ASC LIMIT ?",
-            (*weight_values, _fts_query(tokens), int(k)),
+            f"SELECT products.asin, bm25(products, {weight_placeholders}) AS score FROM products "
+            "LEFT JOIN product_catalog c ON c.asin = products.asin WHERE "
+            + where
+            + " ORDER BY score ASC, products.asin ASC LIMIT ? OFFSET ?",
+            (*weight_values, *parameters, int(k), offset),
         ).fetchall()
         return [
-            SearchHit(asin=row["asin"], score=-float(row["score"]), rank=index)
+            SearchHit(asin=row["asin"], score=-float(row["score"]), rank=index + offset)
             for index, row in enumerate(rows, start=1)
         ]
+
+    def count(self, query, *, filters=None, exclude_asins=None) -> int:
+        """Count the identical filtered match set without sorting/materializing hits."""
+        tokens = search_tokens(query)
+        if not tokens:
+            return 0
+        where, parameters = _search_where(tokens, filters, exclude_asins)
+        row = self._connection.execute(
+            "SELECT count(*) FROM products LEFT JOIN product_catalog c ON c.asin=products.asin WHERE " + where,
+            parameters).fetchone()
+        return int(row[0])
 
     def contains_asin(self, asin: object) -> bool:
         row = self._connection.execute(
@@ -362,3 +399,39 @@ class MultiFieldBM25Searcher:
 
     def close(self):
         self._connection.close()
+
+
+def _search_where(tokens, filters, exclude_asins):
+    clauses = ["products MATCH ?"]
+    parameters = [_fts_query(tokens)]
+    filters = filters or {}
+    if filters.get("predicates"):
+        from .product_facts import SQL_PREDICATES
+        clauses.append(SQL_PREDICATES)
+        parameters.append(json.dumps(filters["predicates"], ensure_ascii=False, sort_keys=True))
+    if filters.get("category"):
+        clauses.append("instr(normalize_public(c.category), ?) > 0")
+        parameters.append(normalize_query(filters["category"]))
+    if filters.get("brand"):
+        clauses.append("normalize_public(c.brand) = ?")
+        parameters.append(normalize_query(filters["brand"]))
+    for key, column, operator in (
+        ("min_price", "price_max", ">="),
+        ("max_price", "price_min", "<="),
+    ):
+        if filters.get(key) is not None:
+            condition = f"c.{column} {operator} ?"
+            if filters.get("include_unknown_price", True):
+                condition = f"({condition} OR c.{column} IS NULL)"
+            clauses.append(condition)
+            parameters.append(filters[key])
+    if exclude_asins:
+        clauses.append(f"c.asin NOT IN ({','.join('?' for _ in exclude_asins)})")
+        parameters.extend(exclude_asins)
+    # Keep orphaned FTS hits visible to ProductCatalog's integrity check;
+    # an inner join would silently hide a corrupted public catalog.
+    clauses = [
+        clauses[0],
+        *(f"(c.asin IS NULL OR {clause})" for clause in clauses[1:]),
+    ]
+    return " AND ".join(clauses), parameters

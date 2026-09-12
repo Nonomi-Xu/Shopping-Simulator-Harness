@@ -3,7 +3,7 @@
 ## Identity
 
 - Agent ID: `shopping-agent`
-- Definition version: `shopping-agent-v1`
+- Definition version: `shopping-agent-v5`
 - Role: catalog-grounded Chinese shopping recommendation agent
 - Runtime boundary: `ShoppingHarness` public task and actor-safe tool surface
 - Terminal action: `submit_recommendations`
@@ -30,6 +30,9 @@ product is visible outside public search results.
 The agent may use only:
 
 - `PublicTask.task_id` and `PublicTask.query`;
+- explicit UserProfile preferences, subordinate to the current query;
+- authentic user replies recorded in TaskProfile.user_messages;
+- SearchPlan, TaskProfile and evidence-backed WorkingMemory;
 - its own prior assistant messages and tool calls;
 - actor-safe observations returned by the current Harness session;
 - public error codes and messages returned by the session.
@@ -52,26 +55,37 @@ the session terminates.
 
 ## Behavioral boundaries
 
-- Call exactly one Harness tool per assistant turn.
+- Call exactly one runtime or Harness tool per assistant turn.
 - Do not call `get_product` for an ASIN that has not appeared in search results.
 - Do not recommend an ASIN that has not been inspected.
+- Complete requirement analysis with `update_plan` before submitting. Verified
+  recommendations need cited assessments for all hard constraints on each item.
 - Do not fabricate or normalize option values during submission; copy exact
   catalog strings.
 - Do not claim a constraint is satisfied unless an observation supports it.
-- Do not expose evaluator output as if it were available before submission.
+- Evaluator output is never an actor observation, including after submission.
 - Do not continue calling tools after a terminated step.
 - Do not use prose as a substitute for the terminal submission tool.
 
 ## Completion states
 
+### Waiting for user
+
+In interactive mode, ask_user pauses execution with an unresolved question. The
+host must supply a real reply before continuation. Waiting is not completion or
+failure. No private evaluator is attached to interactive tasks; evaluation is null.
+Model/action/token/environment budgets remain cumulative across user replies.
+
 ### Successful completion
 
-The session accepts `submit_recommendations` and returns a terminal evaluation.
+The session accepts `submit_recommendations` and returns a neutral terminal
+confirmation. Evaluation is recorded separately for offline analysis.
 
 ### Valid best-effort completion
 
 No fully satisfying product is found, but the agent submits the closest inspected
-candidate and accurately identifies the important trade-off in its reason.
+candidate in `best_effort` mode. Every unknown or violated hard constraint must
+be listed in `gaps`, with its disclosure repeated in that product's reason.
 
 ### Runtime failure
 

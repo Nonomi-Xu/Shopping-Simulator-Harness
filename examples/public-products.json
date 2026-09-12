@@ -1,0 +1,30 @@
+[
+  {
+    "asin": "white-headphones",
+    "title": "白色通勤耳机",
+    "category": "数码›耳机",
+    "brand": "Demo",
+    "price_min": 199,
+    "price_max": 199,
+    "pricing": [199],
+    "attributes": ["白色", "蓝牙连接"],
+    "customization_options": {
+      "颜色": [{"value": "白色", "price": 199, "is_available": true}]
+    },
+    "variant_combinations": []
+  },
+  {
+    "asin": "black-headphones",
+    "title": "黑色通勤耳机",
+    "category": "数码›耳机",
+    "brand": "Demo",
+    "price_min": 199,
+    "price_max": 199,
+    "pricing": [199],
+    "attributes": ["黑色", "蓝牙连接"],
+    "customization_options": {
+      "颜色": [{"value": "黑色", "price": 199, "is_available": true}]
+    },
+    "variant_combinations": []
+  }
+]

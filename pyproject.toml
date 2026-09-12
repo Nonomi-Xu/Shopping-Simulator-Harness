@@ -4,14 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shopping-simulator-harness"
-version = "0.1.0"
-description = "Deterministic recommendation harness for Shopping Simulator"
+version = "0.6.0"
+description = "Multi-agent shopping advisor with audited planning, observation, BM25 and vector retrieval"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.7,<3",
 ]
 
 [project.optional-dependencies]
+vector = [
+    "numpy>=1.24,<3",
+]
 dev = [
     "duckdb>=1.0,<2",
 ]
@@ -27,6 +30,9 @@ include-package-data = false
 where = ["."]
 include = ["src", "src.*"]
 namespaces = true
+
+[tool.setuptools.package-data]
+"src.harness.episodes" = ["prompts/*.md", "topics.json"]
 
 [tool.setuptools.data-files]
 "share/shopping-simulator-harness/skills/shopping-agent" = [

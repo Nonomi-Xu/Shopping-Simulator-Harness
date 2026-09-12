@@ -1,0 +1,30 @@
+{
+  "mode": "offline",
+  "reference": "current",
+  "repeat_seeds": [11, 22, 33],
+  "selection_seed": 42,
+  "statistics_seed": 2026,
+  "bootstrap_samples": 2000,
+  "confidence": 0.95,
+  "budget": {
+    "max_turns": 60,
+    "max_tool_calls": 60,
+    "max_environment_calls": 20,
+    "max_searches": 8,
+    "max_user_questions": 10
+  },
+  "variants": [
+    {
+      "name": "current",
+      "model": "deepseek-v4-flash",
+      "provider_parameters": {"temperature": 0},
+      "runtime": {"agent_mode": "single", "recent_turns": 4, "memory_candidate_limit": 10}
+    },
+    {
+      "name": "short-context",
+      "model": "deepseek-v4-flash",
+      "provider_parameters": {"temperature": 0},
+      "runtime": {"agent_mode": "single", "recent_turns": 2, "memory_candidate_limit": 5}
+    }
+  ]
+}

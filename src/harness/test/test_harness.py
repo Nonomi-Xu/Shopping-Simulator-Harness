@@ -104,7 +104,7 @@ class ShoppingHarnessTest(unittest.TestCase):
         manifest = self.harness.manifest
         task = self.harness.get_public_task(self.target_task_id)
 
-        self.assertEqual(manifest["harness_version"], "shopping-harness-v1")
+        self.assertEqual(manifest["harness_version"], "shopping-harness-v2")
         self.assertEqual(manifest["default_max_steps"], 7)
         self.assertEqual(
             manifest["product_data_sha256"],

@@ -1,0 +1,9 @@
+{
+  "seed": 42,
+  "max_turns": 60,
+  "max_tool_calls": 60,
+  "max_environment_calls": 20,
+  "max_searches": 8,
+  "max_user_questions": 10,
+  "currency": "CNY"
+}

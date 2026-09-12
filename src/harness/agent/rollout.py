@@ -20,9 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..providers import TokenUsage
 from ..schemas import SessionSnapshot, TaskSplit
 from .runner import AgentRunResult
+from .artifacts import write_run_artifacts
 
 
-ROLLOUT_RUNNER_VERSION = "shopping-rollout-runner-v2"
+ROLLOUT_RUNNER_VERSION = "shopping-rollout-runner-v3"
 _ROLLOUT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _TASK_ID_PATTERN = re.compile(r"^task_[0-9a-f]{24}$")
 
@@ -74,6 +75,8 @@ class RunConsumption(BaseModel):
     duration_seconds: float = Field(ge=0.0)
     model_turn_count: int = Field(ge=0)
     tool_call_count: int = Field(ge=0)
+    action_count: int = Field(default=0, ge=0)
+    search_count: int = Field(default=0, ge=0)
     usage: TokenUsage | None = None
 
 
@@ -101,10 +104,7 @@ class RolloutTaskRecord(BaseModel):
         if self.consumption.duration_seconds != self.duration_seconds:
             raise ValueError("consumption duration must match record duration")
         if self.result is None:
-            if (
-                self.consumption.model_turn_count
-                or self.consumption.tool_call_count
-            ):
+            if self.consumption.model_turn_count or self.consumption.tool_call_count:
                 raise ValueError("pre-result failures cannot report Agent activity")
             if self.consumption.usage is not None:
                 raise ValueError("pre-result failures cannot report token usage")
@@ -113,6 +113,10 @@ class RolloutTaskRecord(BaseModel):
                 raise ValueError("consumption model turns must match result")
             if self.consumption.tool_call_count != self.result.tool_call_count:
                 raise ValueError("consumption tool calls must match result")
+            if self.consumption.action_count != self.result.action_count:
+                raise ValueError("consumption actions must match result")
+            if self.consumption.search_count != self.result.search_count:
+                raise ValueError("consumption searches must match result")
             if self.consumption.usage != self.result.usage:
                 raise ValueError("consumption token usage must match result")
         return self
@@ -139,6 +143,8 @@ class RolloutSummary(BaseModel):
     average_valid_reward: float | None = Field(default=None, ge=0.0, le=1.0)
     total_model_turns: int = Field(ge=0)
     total_tool_calls: int = Field(ge=0)
+    total_actions: int = Field(default=0, ge=0)
+    total_searches: int = Field(default=0, ge=0)
     usage: TokenUsage | None = None
     terminal_reason_counts: dict[str, int]
     total_duration_seconds: float = Field(ge=0.0)
@@ -235,9 +241,7 @@ class RolloutRunner:
         started_at = datetime.now(timezone.utc)
         started_clock = time.perf_counter()
 
-        records: list[RolloutTaskRecord | None] = [
-            None for _ in normalized_task_ids
-        ]
+        records: list[RolloutTaskRecord | None] = [None for _ in normalized_task_ids]
         if workers == 1:
             for index, task_id in enumerate(normalized_task_ids):
                 records[index] = self._run_one(
@@ -306,6 +310,8 @@ class RolloutRunner:
                 max_steps=max_steps,
                 session_id=session_id,
             )
+            if result.status == "waiting_for_user":
+                raise RolloutError("batch rollout does not support interactive pauses; use AgentRunner.run_query")
             if result.task_id != task_id or result.session_id != session_id:
                 raise RolloutError(
                     "TaskRunner returned a result for a different task or session"
@@ -320,6 +326,8 @@ class RolloutRunner:
                     duration_seconds=duration_seconds,
                     model_turn_count=result.model_turn_count,
                     tool_call_count=result.tool_call_count,
+                    action_count=result.action_count,
+                    search_count=result.search_count,
                     usage=result.usage,
                 ),
                 result=result,
@@ -367,9 +375,7 @@ class RolloutRunner:
                 raise TypeError(f"task_ids[{index}] must be a string")
             normalized_task_id = task_id.strip()
             if not _TASK_ID_PATTERN.fullmatch(normalized_task_id):
-                raise ValueError(
-                    f"task_ids[{index}] is not a valid public task ID"
-                )
+                raise ValueError(f"task_ids[{index}] is not a valid public task ID")
             normalized.append(normalized_task_id)
         if not normalized:
             raise ValueError("task_ids must not be empty")
@@ -443,9 +449,7 @@ def _summarize(records: list[RolloutTaskRecord]) -> RolloutSummary:
     valid_evaluations = [item for item in evaluations if item.reward_valid]
     requested_count = len(records)
     strict_success_count = sum(item.strict_success for item in evaluations)
-    terminal_reasons = Counter(
-        result.terminal_reason for result in results
-    )
+    terminal_reasons = Counter(result.terminal_reason for result in results)
     unexpected_error_count = requested_count - len(results)
     if unexpected_error_count:
         terminal_reasons["unexpected_error"] = unexpected_error_count
@@ -461,19 +465,18 @@ def _summarize(records: list[RolloutTaskRecord]) -> RolloutSummary:
         reward_valid_count=len(valid_evaluations),
         strict_success_count=strict_success_count,
         completion_rate=(
-            sum(result.status == "completed" for result in results)
-            / requested_count
+            sum(result.status == "completed" for result in results) / requested_count
         ),
         strict_success_rate=strict_success_count / requested_count,
         reward_coverage=len(valid_evaluations) / requested_count,
         average_reward=total_reward / requested_count,
         average_valid_reward=(
-            total_reward / len(valid_evaluations)
-            if valid_evaluations
-            else None
+            total_reward / len(valid_evaluations) if valid_evaluations else None
         ),
         total_model_turns=sum(result.model_turn_count for result in results),
         total_tool_calls=sum(result.tool_call_count for result in results),
+        total_actions=sum(result.action_count for result in results),
+        total_searches=sum(result.search_count for result in results),
         usage=_aggregate_usage(results),
         terminal_reason_counts=dict(sorted(terminal_reasons.items())),
         total_duration_seconds=sum(record.duration_seconds for record in records),
@@ -501,9 +504,12 @@ def _aggregate_usage(results: list[AgentRunResult]) -> TokenUsage | None:
 
 
 def _persist_report(report: RolloutReport, output_dir: Path) -> None:
-    records_text = "".join(
-        f"{record.model_dump_json()}\n" for record in report.records
-    )
+    for record in report.records:
+        if record.result is not None:
+            write_run_artifacts(
+                record.result, output_dir / "tasks" / f"{record.index + 1:06d}"
+            )
+    records_text = "".join(f"{record.model_dump_json()}\n" for record in report.records)
     summary_payload = report.model_dump(
         mode="json",
         exclude={"records"},

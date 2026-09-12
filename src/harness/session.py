@@ -24,6 +24,8 @@ from .schemas import (
     ProductSummary,
     PublicTask,
     SearchProductsAction,
+    SearchPage,
+    SearchFilters,
     SessionState,
     SessionStatus,
     SessionStep,
@@ -34,7 +36,7 @@ from .schemas import (
 from .tasks import TaskStore, TaskStoreError
 
 
-SESSION_VERSION = "shopping-session-v1"
+SESSION_VERSION = "shopping-session-v2"
 DEFAULT_MAX_STEPS = 20
 
 SEARCH_PRODUCTS = "search_products"
@@ -92,6 +94,7 @@ class ShoppingSession:
         catalog: ProductCatalog | _Catalog,
         max_steps: int = DEFAULT_MAX_STEPS,
         session_id: str | None = None,
+        evaluate: bool = True,
     ) -> None:
         if isinstance(max_steps, bool) or not isinstance(max_steps, int):
             raise TypeError("max_steps must be an integer")
@@ -114,6 +117,7 @@ class ShoppingSession:
             raise ValueError("session_id must not be empty")
 
         self._task_store = task_store
+        self._evaluate = evaluate
         self._catalog = catalog
         self._public_task = public_task.model_copy(deep=True)
         self._session_id = resolved_session_id
@@ -257,7 +261,7 @@ class ShoppingSession:
                 arguments=arguments,
                 status="error",
                 error_code="infrastructure_error",
-                message=str(exc),
+                message="catalog, task store or evaluator infrastructure failure",
                 terminal_reason="infrastructure_error",
             )
 
@@ -267,10 +271,25 @@ class ShoppingSession:
         arguments: dict[str, Any],
     ) -> SessionStep:
         search_action = SearchProductsAction.model_validate(action)
-        results = self._catalog.search(
-            search_action.query,
-            limit=search_action.limit,
-        )
+        page = None
+        if callable(getattr(self._catalog, "search_page", None)):
+            results, page = self._catalog.search_page(search_action)
+        else:
+            if (
+                search_action.offset
+                or search_action.exclude_asins
+                or search_action.filters != SearchFilters()
+            ):
+                return self._record(
+                    tool_name=SEARCH_PRODUCTS,
+                    arguments=arguments,
+                    status="rejected",
+                    error_code="unsupported_search_options",
+                    message="catalog adapter does not support filtered/paged search",
+                )
+            results = self._catalog.search(
+                search_action.query, limit=search_action.limit
+            )
         for result in results:
             if result.asin not in self._surfaced_asin_set:
                 self._surfaced_asin_set.add(result.asin)
@@ -281,6 +300,8 @@ class ShoppingSession:
             arguments=arguments,
             status="success",
             observation=observation,
+            search_page=page,
+            source=self._source_metadata(),
         )
 
     def _execute_get_product(
@@ -302,11 +323,16 @@ class ShoppingSession:
         if product.asin not in self._inspected_asin_set:
             self._inspected_asin_set.add(product.asin)
             self._inspected_asins.append(product.asin)
+        data = product.model_dump(mode="json", exclude_unset=not self._evaluate)
+        if product_action.fields is not None:
+            selected = {"asin", "title", "category", *product_action.fields}
+            data = {key: value for key, value in data.items() if key in selected}
         return self._record(
             tool_name=GET_PRODUCT,
             arguments=arguments,
             status="success",
-            observation=product.model_dump(mode="json"),
+            observation=data,
+            source=self._source_metadata(),
         )
 
     def _execute_submission(
@@ -334,17 +360,18 @@ class ShoppingSession:
                 ),
             )
 
-        facts = self._task_store.get_private_facts(self._public_task.task_id)
-        self._evaluation = evaluate_submission(
-            facts=facts,
-            submission=submission,
-            catalog=self._catalog,  # type: ignore[arg-type]
-        )
+        if self._evaluate:
+            facts = self._task_store.get_private_facts(self._public_task.task_id)
+            self._evaluation = evaluate_submission(
+                facts=facts,
+                submission=submission,
+                catalog=self._catalog,  # type: ignore[arg-type]
+            )
         return self._record(
             tool_name=SUBMIT_RECOMMENDATIONS,
             arguments=arguments,
             status="success",
-            observation=self._evaluation.model_dump(mode="json"),
+            observation={"submitted": True},
             terminal_reason="submitted",
         )
 
@@ -358,6 +385,8 @@ class ShoppingSession:
         error_code: str | None = None,
         message: str | None = None,
         terminal_reason: SessionTerminalReason | None = None,
+        search_page: SearchPage | None = None,
+        source: dict[str, Any] | None = None,
     ) -> SessionStep:
         self._step_count += 1
         if terminal_reason is not None:
@@ -374,6 +403,8 @@ class ShoppingSession:
             arguments=arguments,
             status=status,
             observation=observation,
+            search_page=search_page,
+            source=source,
             error_code=error_code,
             message=message,
             terminated=self._status == "terminated",
@@ -382,9 +413,11 @@ class ShoppingSession:
         self._history.append(step)
         return step.model_copy(deep=True)
 
+    def _source_metadata(self):
+        metadata = getattr(self._catalog, "last_observation_source", None)
+        return dict(metadata) if metadata else None
+
     def _ensure_active(self) -> None:
         if self._status == "terminated":
             reason = self._terminal_reason or "unknown"
-            raise SessionTerminatedError(
-                f"session is terminated: {reason}"
-            )
+            raise SessionTerminatedError(f"session is terminated: {reason}")
