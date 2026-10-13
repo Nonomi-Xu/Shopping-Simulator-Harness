@@ -25,7 +25,7 @@ from .agent import (
     PreferenceStore,
 )
 from .agent.artifacts import replay_run, write_run_artifacts
-from .paths import PROJECT_DIR, OUTPUTS_DIR, result_path
+from .paths import HARNESS_DIR, OUTPUTS_DIR, result_path
 from .catalog import CatalogError
 from .env import DotEnvError, load_dotenv
 from .harness import HarnessError, ShoppingHarness
@@ -40,8 +40,8 @@ from .interactive import InteractiveHarness
 from .sources import JsonProductSource, HttpProductSource
 
 
-DEFAULT_PRODUCTS_PATH = PROJECT_DIR / "data/fine_items_eval_train_all.json"
-DEFAULT_INDEX_PATH = PROJECT_DIR / "data/product_search.sqlite3"
+DEFAULT_PRODUCTS_PATH = HARNESS_DIR / "data/fine_items_eval_train_all.json"
+DEFAULT_INDEX_PATH = HARNESS_DIR / "data/product_search.sqlite3"
 DEFAULT_OUTPUT_ROOT = OUTPUTS_DIR / "rollouts"
 
 
@@ -149,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-root",
         type=result_path,
         default=DEFAULT_OUTPUT_ROOT,
-        help="Parent of unique rollout directories (relative to Harness project).",
+        help="Parent of unique rollout directories (relative to Shopping-Simulator repository).",
     )
     rollout_parser.add_argument(
         "--rollout-id",

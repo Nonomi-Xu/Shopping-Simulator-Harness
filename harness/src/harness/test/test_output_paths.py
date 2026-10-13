@@ -32,6 +32,8 @@ class OutputPathsTest(unittest.TestCase):
                 defaults = parser.parse_args(['rollout', '--split', 'test'])
                 self.assertEqual(defaults.output_root, paths.OUTPUTS_DIR / 'rollouts')
                 self.assertTrue(defaults.products_path.is_absolute())
+                self.assertEqual(paths.PROJECT_DIR, Path(__file__).resolve().parents[4])
+                self.assertEqual(defaults.products_path, paths.PROJECT_DIR / "harness/data/fine_items_eval_train_all.json")
                 self.assertEqual(paths.result_path('/tmp/explicit'), Path('/tmp/explicit').resolve())
                 self.assertIsNone(parser.parse_args(['experiments', 'run', '--config', 'x']).output_dir)
                 self.assertIsNone(parser.parse_args(['episodes', 'compare', '--cache', 'x']).output_dir)

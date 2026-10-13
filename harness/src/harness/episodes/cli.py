@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from ..agent.contracts import RuntimeConfig
 from ..agent.events import digest
-from ..paths import PROJECT_DIR, result_path, default_run_path
+from ..paths import HARNESS_DIR, result_path, default_run_path
 from ..env import load_dotenv
 from ..providers import DeepSeekProvider, DEFAULT_MODEL, DEFAULT_BASE_URL
 from ..tasks import TaskStore
@@ -23,8 +23,8 @@ def register(parent):
     sub = command.add_subparsers(dest="episode_command", required=True)
     for name in ("prepare", "run", "compare"):
         p = sub.add_parser(name)
-        p.add_argument("--products-path", type=Path, default=PROJECT_DIR / "data/fine_items_eval_train_all.json")
-        p.add_argument("--index-path", type=Path, default=PROJECT_DIR / "data/product_search.sqlite3")
+        p.add_argument("--products-path", type=Path, default=HARNESS_DIR / "data/fine_items_eval_train_all.json")
+        p.add_argument("--index-path", type=Path, default=HARNESS_DIR / "data/product_search.sqlite3")
         p.add_argument("--cache", type=Path, required=True)
         p.add_argument("--count", type=int, default=10, help="maximum selected records; 0 explicitly selects all")
         p.add_argument("--seed", type=int, default=42)
@@ -39,7 +39,7 @@ def register(parent):
             p.add_argument("--split", choices=("all", "test"), default="test")
             p.add_argument("--disclosure-policy", type=Path)
         else:
-            p.add_argument("--output-dir", type=result_path, help="Exact new directory, relative to Harness project; default: unique outputs directory.")
+            p.add_argument("--output-dir", type=result_path, help="Exact new directory, relative to Shopping-Simulator repository; default: unique outputs directory.")
             p.add_argument("--config", type=Path)
             p.add_argument("--runtime-config", type=Path)
             p.add_argument("--skill-dir", type=Path)

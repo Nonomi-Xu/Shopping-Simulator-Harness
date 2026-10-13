@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+HARNESS_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = HARNESS_DIR.parent
 OUTPUTS_DIR = PROJECT_DIR / "outputs"
 
 

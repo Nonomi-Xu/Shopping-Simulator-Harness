@@ -5,7 +5,7 @@ __pycache__/
 *.egg-info/
 /build/
 /dist/
-# Local compatibility link to ../outputs/bm25; generated results are not source.
+# Legacy local results; new runs use the repository-level outputs/bm25 directory.
 /outputs
 /output/
 .env

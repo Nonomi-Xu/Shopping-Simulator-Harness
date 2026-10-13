@@ -19,15 +19,25 @@ class OutputPathsTest(unittest.TestCase):
                 os.chdir(directory)
                 defaults = cli.build_parser().parse_args(['evaluate'])
                 args = cli.build_parser().parse_args([
-                    'evaluate', '--output-dir', 'outputs/custom',
-                    '--resume-dir', 'outputs/old-run',
+                    'evaluate', '--output-dir', '/tmp/bm25-custom',
+                    '--resume-dir', '/tmp/bm25-old-run',
                 ])
             finally:
                 os.chdir(original)
         self.assertEqual(defaults.output_dir, paths.OUTPUTS_DIR / 'evaluations')
-        self.assertEqual(args.output_dir, paths.PROJECT_DIR / 'outputs/custom')
-        self.assertEqual(args.resume_dir, paths.PROJECT_DIR / 'outputs/old-run')
+        self.assertTrue(defaults.output_dir.is_absolute())
+        self.assertEqual(cli.DEFAULT_PRODUCTS, paths.PROJECT_DIR / 'harness/data/fine_items_eval_train_all.json')
+        self.assertEqual(paths.PROJECT_DIR, Path(__file__).resolve().parents[2])
+        self.assertEqual(args.output_dir, Path('/tmp/bm25-custom').resolve())
+        self.assertEqual(args.resume_dir, Path('/tmp/bm25-old-run').resolve())
         self.assertEqual(paths.result_path('/tmp/custom'), Path('/tmp/custom').resolve())
+
+    def test_relative_result_paths_are_rejected(self):
+        for option in ('--output-root', '--output-dir', '--resume-dir'):
+            with self.subTest(option=option), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    cli.build_parser().parse_args(['evaluate', option, 'outputs/ambiguous'])
+                self.assertEqual(error.exception.code, 2)
 
     def test_same_clock_batch_runs_are_distinct_and_resume_reuses_directory(self):
         with tempfile.TemporaryDirectory() as directory, \

@@ -1,19 +1,25 @@
+# GRPO is an independent local project and must not be part of this repository.
+/Shopping-Simulator-grpo/
+
+# Runtime results, local reports, and scratch files.
+/outputs/
+/output/
+/tmp/
+/BM25/outputs/
+/harness/outputs/
+/harness/data/
+
+# Local reference paper.
+/2601.18225v1.pdf
+
 .DS_Store
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
 .env
 .env.*
 !.env.example
-*.egg-info/
-/build/
-/dist/
-# All generated evaluations, audit bundles, reports, and BM25 runs.
-/outputs/
-# Legacy singular output directory; do not add a second results root.
-/output/
-/BM25/outputs
-.pytest_cache/
-.venv/
-
-# Local datasets, generated indexes, manifests, and previews.
-/data/

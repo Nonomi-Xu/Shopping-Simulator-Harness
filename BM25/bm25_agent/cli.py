@@ -19,8 +19,8 @@ from .provider import DEFAULT_BASE_URL, DEFAULT_MODEL, DeepSeekSelector
 from .tasks import TaskStore
 
 
-DEFAULT_PRODUCTS = PROJECT_DIR / "data/fine_items_eval_train_all.json"
-DEFAULT_INDEX = PROJECT_DIR / "data/product_search.sqlite3"
+DEFAULT_PRODUCTS = PROJECT_DIR / "harness/data/fine_items_eval_train_all.json"
+DEFAULT_INDEX = PROJECT_DIR / "harness/data/product_search.sqlite3"
 
 
 def _positive_int(value: str) -> int:
@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--output-root", "--output-dir", dest="output_dir", type=result_path,
         default=OUTPUTS_DIR / "evaluations",
-        help="Parent of unique run directories (relative to Harness repository; --output-dir is an alias).",
+        help="Parent of unique run directories (absolute path required; --output-dir is an alias).",
     )
     evaluate.add_argument(
         "--resume-dir",

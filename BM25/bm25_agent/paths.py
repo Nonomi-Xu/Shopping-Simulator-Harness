@@ -8,10 +8,10 @@ OUTPUTS_DIR = PROJECT_DIR / "outputs" / "bm25"
 
 
 def result_path(value: str | Path) -> Path:
-    """Resolve explicit relative result paths against this project, including readers."""
+    """Require absolute result/checkpoint paths; never depend on the working directory."""
     path = Path(value).expanduser()
     if not path.is_absolute():
-        path = PROJECT_DIR / path
+        raise ValueError("result paths must be absolute (or start with ~)")
     return path.resolve()
 
 

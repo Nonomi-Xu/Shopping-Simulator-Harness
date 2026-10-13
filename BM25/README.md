@@ -33,11 +33,11 @@ Agent 只能选择其中 1 个 ASIN 及其可用规格
 
 ## 数据
 
-BM25 位于 Harness 仓库的 `BM25/`，默认只读使用仓库数据，不复制大文件：
+BM25 是 Shopping-Simulator 仓库根目录下的实体目录 `BM25/`，与 `harness/` 并列，默认只读使用仓库数据，不复制大文件：
 
 ```text
-../data/fine_items_eval_train_all.json
-../data/product_search.sqlite3
+../harness/data/fine_items_eval_train_all.json
+../harness/data/product_search.sqlite3
 ```
 
 也可以在主命令前通过 `--products-path` 和 `--index-path` 指定其他兼容数据。
@@ -98,8 +98,7 @@ bm25-agent run --task-id task_xxxxxxxxxxxxxxxxxxxxxxxx
 ```bash
 bm25-agent evaluate \
   --split test \
-  --workers 4 \
-  --output-root outputs/bm25/evaluations
+  --workers 4
 ```
 
 Harness 与 BM25 Agent 统一使用 `all`（全量）和 `test`（通路测试），忽略原始
@@ -109,15 +108,17 @@ train/eval 标签。Test 使用固定整数 Seed 42 抽取 10 条任务（不足
 执行全量 Agent 检测：
 
 ```bash
-bm25-agent evaluate --split all --workers 32 --output-root outputs/bm25/evaluations
+bm25-agent evaluate --split all --workers 32
 ```
 
-默认结果根目录固定为仓库的 `outputs/bm25/evaluations/`，与启动目录无关。
-所有相对 `--output-root`（旧名 `--output-dir`）和 `--resume-dir` 均相对 Harness
-仓库根目录解析；绝对路径及 `~` 路径可指定外部位置。该规则也适用于从 `BM25/`
-启动的命令。`--output-root` 是运行目录的父目录，`--resume-dir` 是已有运行目录本身。
+默认结果目录由代码定位仓库根目录后生成绝对路径：
+`<Shopping-Simulator绝对路径>/outputs/bm25/evaluations/`，不依赖当前工作目录，
+不使用软链接。通常省略 `--output-root` 即可。
+显式指定 `--output-root`（旧名 `--output-dir`）和 `--resume-dir` 时，必须提供
+绝对路径或以 `~` 开头的路径；相对路径会直接报错，避免保存到含糊的位置。
+`--output-root` 是运行目录的父目录，`--resume-dir` 是已有运行目录本身。
 CLI 在任务开始前向 stderr 打印绝对目录，结束时在 stdout 的 `output_dir` 返回相同位置。
-历史目录可直接使用绝对路径恢复，无须重命名。
+历史目录可直接使用迁移后的绝对路径恢复，无须重命名。
 
 每次运行会创建不可覆盖的 `all_<UTC微秒时间>_<UUID>` 或 `test_<UTC微秒时间>_<UUID>` 目录：
 
@@ -132,8 +133,7 @@ CLI 在任务开始前向 stderr 打印绝对目录，结束时在 stdout 的 `o
 bm25-agent evaluate \
   --split all \
   --workers 32 \
-  --output-root outputs/bm25/evaluations \
-  --resume-dir outputs/bm25/evaluations/all_<首次运行ID>
+  --resume-dir /absolute/path/to/Shopping-Simulator/outputs/bm25/evaluations/all_<首次运行ID>
 ```
 
 如果从 `BM25` 之外执行，或 `.env` 不在当前目录，可显式传入
@@ -157,4 +157,4 @@ bm25-agent evaluate \
 本地 `../outputs/bm25/eval_20260911T112102Z/runs.jsonl`（不提交 Git）。
 
 `results/` 仅保留文中引用的两份小型历史基准汇总，属于版本化参考资料；新评测不会写入这里。
-运行结果、缓存、环境配置和本地兼容链接均由 `.gitignore` 忽略。
+运行结果、缓存和环境配置均由根目录 `.gitignore` 忽略；BM25 源码以实体目录直接纳入 Git。
