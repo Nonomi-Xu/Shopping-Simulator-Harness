@@ -3,6 +3,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from src.harness.paths import result_path
 from src.data.search_bm25 import build_index, sha256_file
 from src.harness.tasks import TaskStore
 from src.harness.providers import AssistantTurn, ToolCall, TokenUsage
@@ -79,7 +80,7 @@ class DemoProvider:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=result_path, required=True)
     args = parser.parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=False)
     data = args.output_dir/"private-data"

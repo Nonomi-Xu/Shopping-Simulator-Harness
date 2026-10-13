@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from ..agent.contracts import RuntimeConfig
 from ..agent.events import digest
+from ..paths import PROJECT_DIR, result_path, default_run_path
 from ..env import load_dotenv
 from ..providers import DeepSeekProvider, DEFAULT_MODEL, DEFAULT_BASE_URL
 from ..tasks import TaskStore
@@ -22,8 +23,8 @@ def register(parent):
     sub = command.add_subparsers(dest="episode_command", required=True)
     for name in ("prepare", "run", "compare"):
         p = sub.add_parser(name)
-        p.add_argument("--products-path", type=Path, default=Path("data/fine_items_eval_train_all.json"))
-        p.add_argument("--index-path", type=Path, default=Path("data/product_search.sqlite3"))
+        p.add_argument("--products-path", type=Path, default=PROJECT_DIR / "data/fine_items_eval_train_all.json")
+        p.add_argument("--index-path", type=Path, default=PROJECT_DIR / "data/product_search.sqlite3")
         p.add_argument("--cache", type=Path, required=True)
         p.add_argument("--count", type=int, default=10, help="maximum selected records; 0 explicitly selects all")
         p.add_argument("--seed", type=int, default=42)
@@ -38,13 +39,13 @@ def register(parent):
             p.add_argument("--split", choices=("all", "test"), default="test")
             p.add_argument("--disclosure-policy", type=Path)
         else:
-            p.add_argument("--output-dir", type=Path, required=True)
+            p.add_argument("--output-dir", type=result_path, help="Exact new directory, relative to Harness project; default: unique outputs directory.")
             p.add_argument("--config", type=Path)
             p.add_argument("--runtime-config", type=Path)
             p.add_argument("--skill-dir", type=Path)
         if name == "run": p.add_argument("--baseline", choices=("full_query", "long_horizon"), default="long_horizon")
     replay = sub.add_parser("replay")
-    replay.add_argument("--run-dir", type=Path, required=True)
+    replay.add_argument("--run-dir", type=result_path, required=True)
 
 
 def handle(args):
@@ -73,6 +74,8 @@ def handle(args):
         args.cache.with_suffix(".prepare.json").write_text(json.dumps(report, ensure_ascii=False, indent=2)+"\n")
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 1 if summary["failed"] else 0
+    if args.output_dir is None:
+        args.output_dir = default_run_path("episodes", args.episode_command)
     if args.output_dir.exists(): raise ValueError("output directory already exists")
     with EpisodeStore(args.cache, readonly=True) as store:
         episodes = list(store.episodes())
@@ -97,7 +100,7 @@ def handle(args):
         run = factory().run_episode(episodes[0], baseline=args.baseline)
         write_episode_artifacts(run, args.output_dir)
         result = {"episode_id": run.trajectory.episode_id, "terminal_reason": run.trajectory.terminal_reason, "metrics": run.metrics}
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps({**result, "output_dir": str(args.output_dir)}, ensure_ascii=False, indent=2))
     return 0
 
 

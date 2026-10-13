@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+from src.harness.paths import result_path
 import tempfile
 
 from src.data.search_bm25 import build_index, sha256_file
@@ -151,7 +152,7 @@ class ComparisonProvider:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--output-dir", type=Path, default=Path("outputs/comparison-demo")
+        "--output-dir", type=result_path, default=result_path("outputs/comparison-demo")
     )
     args = parser.parse_args(argv)
     if args.output_dir.exists():

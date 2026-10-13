@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shopping-bm25-agent"
+version = "0.1.0"
+description = "BM25 Top-5 retrieval followed by one constrained shopping-agent decision"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+bm25-agent = "bm25_agent.cli:entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bm25_agent*"]

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+/build/
+/dist/
+# Local compatibility link to ../outputs/bm25; generated results are not source.
+/outputs
+/output/
+.env
+.env.*
+!.env.example
+.DS_Store

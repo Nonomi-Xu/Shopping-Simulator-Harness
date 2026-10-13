@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+from src.harness.paths import result_path
 
 from examples.long_horizon_demo import DemoProvider
 from src.data.search_bm25 import build_index, sha256_file
@@ -16,7 +17,7 @@ from src.harness.tasks import TaskStore
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=result_path, required=True)
     args = parser.parse_args(argv)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)

@@ -44,6 +44,40 @@ Shopping Simulator Harness 是一个轻量、可审计的购物推荐评测核�
 | 比较模型、配置及重复运行 | `experiments run/report` | 任务级统计、失败分类与离线报告重建 |
 | 检查已保存的执行过程 | `replay` / `episodes replay` | 事件链校验与状态重建 |
 
+## 结果输出目录约定
+
+BM25 基线现在随本仓库保存在 [`BM25/`](BM25/README.md)，在该目录安装
+`python -m pip install -e .` 后使用 `bm25-agent`。评测、交互、回放 CLI 和离线 demo 的相对结果路径
+（`--output-root`、`--output-dir`、`--output`、`--artifacts-dir`、`--run-dir`、
+`--resume-dir`）均以 Harness 仓库根目录为基准，与 shell 当前目录无关。
+绝对路径和 `~` 路径仍可指向外部位置。输入文件的显式相对路径仍按当前目录解析；
+默认商品和索引路径固定到仓库 `data/`。Python 库 API 和数据/向量索引构建命令的显式路径保持原语义。
+
+```text
+outputs/                         唯一的默认结果根目录（不提交 Git）
+  bm25/evaluations/<split>_<UTC微秒时间>_<UUID>/
+    run_config.json              恢复配置
+    runs.jsonl                   逐题结果
+    summary.json                 汇总
+  rollouts/rollout_<UTC微秒时间>_<UUID>/
+    runs.jsonl / consumption.jsonl / summary.json / tasks/
+  episodes/<run或compare>_<UTC微秒时间>_<UUID>/
+  experiments/run_<UTC微秒时间>_<UUID>/
+  reports/report_<UTC微秒时间>_<UUID>/
+```
+
+BM25 `evaluate` 与 Harness `rollout` 的 `--output-root` 指定父目录，自动创建唯一子目录；
+BM25 继续接受旧名 `--output-dir`。Episode `run/compare`、实验 `run/report`
+省略 `--output-dir` 时也自动创建上述独立目录；显式 `--output-dir` 则表示精确目录，
+已有目录会拒绝覆盖。单任务 `run` 默认仍输出 JSON 到 stdout，可用
+`--output outputs/single/result.json` 或 `--artifacts-dir outputs/single/audit` 保存。
+恢复和回放参数指定已有目录，不会生成新的目录名。离线 demo 的相对输出也遵循此规则，
+显式命名的 demo 目录需保持未存在。
+
+每次运行从命令返回的绝对 `output_dir` 定位结果；不要把命令输出重定向为另一份基准结果。
+历史结果保留原内容，BM25 历史运行移到本地 `outputs/bm25/`；已有 Harness 结果保持原位。
+BM25 的 `results/` 只保存 README 引用的历史汇总，不用于新运行落盘。
+
 ## 无需 API Key 的离线演示
 
 先按下方安装步骤准备 Python 和依赖，再在仓库根目录执行。示例均自带合成商品和
@@ -436,7 +470,7 @@ shopping-agent run \
   --max-steps 20
 ```
 
-使用 `--output result.json` 可写入新文件；如果文件已存在，命令会拒绝覆盖。
+使用 `--output outputs/single/result.json` 可写入新文件；如果文件已存在，命令会拒绝覆盖。
 
 ### 批量 Rollout
 
@@ -482,7 +516,7 @@ CLI 默认使用 `--tool-choice auto` 以兼容 DeepSeek thinking 模式。Runne
 每次 rollout 创建不可覆盖的独立目录：
 
 ```text
-outputs/rollouts/rollout_<UTC时间>_<随机后缀>/
+outputs/rollouts/rollout_<UTC微秒时间>_<UUID>/
   runs.jsonl                       每项任务的完整 AgentRunResult 或异常记录
   consumption.jsonl                每项任务的耗时、轮次、工具数和 Token 消耗
   summary.json                     配置、任务顺序、质量与 Token 汇总
@@ -608,6 +642,8 @@ Actor 输入防泄漏、长程指标及实验统计/报告重建。未解析规�
 ## 仓库结构
 
 ```text
+BM25/                             固定 Top-5 检索与单次 Agent 决策基线
+outputs/                          本地运行结果与审计包（Git 忽略）
 pyproject.toml                    包元数据、依赖与命令行入口
 data/                             本地数据、索引、Manifest、Episode 缓存与诊断结果
 docs/                             架构、交互、长程 Episode 与实验评测说明

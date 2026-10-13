@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+from src.harness.paths import result_path
 
 from src.harness.agent import (
     AgentRunner,
@@ -95,7 +96,7 @@ class DemoProvider:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--output-dir", type=Path, default=Path("outputs/stage-three-demo")
+        "--output-dir", type=result_path, default=result_path("outputs/stage-three-demo")
     )
     args = parser.parse_args(argv)
     root = args.output_dir.expanduser().resolve()

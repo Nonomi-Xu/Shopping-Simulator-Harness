@@ -25,6 +25,7 @@ from .agent import (
     PreferenceStore,
 )
 from .agent.artifacts import replay_run, write_run_artifacts
+from .paths import PROJECT_DIR, OUTPUTS_DIR, result_path
 from .catalog import CatalogError
 from .env import DotEnvError, load_dotenv
 from .harness import HarnessError, ShoppingHarness
@@ -39,9 +40,9 @@ from .interactive import InteractiveHarness
 from .sources import JsonProductSource, HttpProductSource
 
 
-DEFAULT_PRODUCTS_PATH = Path("data/fine_items_eval_train_all.json")
-DEFAULT_INDEX_PATH = Path("data/product_search.sqlite3")
-DEFAULT_OUTPUT_ROOT = Path("outputs/rollouts")
+DEFAULT_PRODUCTS_PATH = PROJECT_DIR / "data/fine_items_eval_train_all.json"
+DEFAULT_INDEX_PATH = PROJECT_DIR / "data/product_search.sqlite3"
+DEFAULT_OUTPUT_ROOT = OUTPUTS_DIR / "rollouts"
 
 
 class CLIError(RuntimeError):
@@ -69,12 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--task-id", required=True)
     run_parser.add_argument(
         "--artifacts-dir",
-        type=Path,
+        type=result_path,
         help="New directory for the versioned audit bundle.",
     )
     run_parser.add_argument(
         "--output",
-        type=Path,
+        type=result_path,
         help="Write the result JSON to a new file instead of stdout.",
     )
 
@@ -90,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Resume a waiting interactive audit bundle with a real user reply.",
     )
-    resume_parser.add_argument("--run-dir", type=Path, required=True)
+    resume_parser.add_argument("--run-dir", type=result_path, required=True)
     resume_parser.add_argument("--reply", required=True)
     resume_parser.add_argument(
         "--replace-constraint-id",
@@ -146,9 +147,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rollout_parser.add_argument(
         "--output-root",
-        type=Path,
+        type=result_path,
         default=DEFAULT_OUTPUT_ROOT,
-        help="Parent directory for rollout_<id>/ artifacts.",
+        help="Parent of unique rollout directories (relative to Harness project).",
     )
     rollout_parser.add_argument(
         "--rollout-id",
@@ -157,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = subparsers.add_parser(
         "replay", help="Validate an audit bundle and reconstruct public state offline."
     )
-    replay_parser.add_argument("--run-dir", type=Path, required=True)
+    replay_parser.add_argument("--run-dir", type=result_path, required=True)
     subparsers.add_parser(
         "schema", help="Print versioned runtime JSON schemas without starting a model."
     )
@@ -196,7 +197,7 @@ def _add_interactive_arguments(parser):
     )
     parser.add_argument(
         "--artifacts-dir",
-        type=Path,
+        type=result_path,
         required=True,
         help="New audit directory; waiting runs include checkpoint.json.",
     )

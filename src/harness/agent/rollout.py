@@ -7,7 +7,6 @@ import os
 import re
 import tempfile
 import time
-import uuid
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,6 +16,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..paths import new_run_id
 from ..providers import TokenUsage
 from ..schemas import SessionSnapshot, TaskSplit
 from .runner import AgentRunResult
@@ -411,8 +411,7 @@ class RolloutRunner:
 
 def _resolve_rollout_id(rollout_id: str | None) -> str:
     if rollout_id is None:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        return f"rollout_{timestamp}_{uuid.uuid4().hex[:8]}"
+        return new_run_id("rollout")
     if not isinstance(rollout_id, str) or not _ROLLOUT_ID_PATTERN.fullmatch(
         rollout_id,
     ):

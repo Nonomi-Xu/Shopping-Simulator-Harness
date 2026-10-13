@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from ..agent.events import digest
+from ..paths import PROJECT_DIR, result_path, default_run_path
 from ..env import load_dotenv
 from ..episodes.store import EpisodeStore
 from ..providers import DeepSeekProvider
@@ -19,20 +20,20 @@ def register(parent):
     sub = parser.add_subparsers(dest="experiment_command", required=True)
     run = sub.add_parser("run", help="Execute the matrix; calls the configured model providers")
     run.add_argument("--config", type=Path, required=True)
-    run.add_argument("--products-path", type=Path, default=Path("data/fine_items_eval_train_all.json"))
-    run.add_argument("--index-path", type=Path, default=Path("data/product_search.sqlite3"))
+    run.add_argument("--products-path", type=Path, default=PROJECT_DIR / "data/fine_items_eval_train_all.json")
+    run.add_argument("--index-path", type=Path, default=PROJECT_DIR / "data/product_search.sqlite3")
     run.add_argument("--cache", type=Path)
     run.add_argument("--split", choices=("all", "test"), default="test")
     run.add_argument("--count", type=int, default=10, help="fixed case count; 0 selects all")
     selected = run.add_mutually_exclusive_group()
     selected.add_argument("--task-id", action="append")
     selected.add_argument("--episode-id", action="append")
-    run.add_argument("--output-dir", type=Path, required=True)
+    run.add_argument("--output-dir", type=result_path, help="Exact new directory, relative to Harness project; default: unique outputs directory.")
     run.add_argument("--env-file", type=Path)
     run.add_argument("--no-env-file", action="store_true")
     report = sub.add_parser("report", help="Verify completed journal and recompute statistics offline")
-    report.add_argument("--run-dir", type=Path, required=True)
-    report.add_argument("--output-dir", type=Path, required=True)
+    report.add_argument("--run-dir", type=result_path, required=True)
+    report.add_argument("--output-dir", type=result_path, help="Exact new directory, relative to Harness project; default: unique outputs directory.")
 
 
 def select_cases(args, config):
@@ -79,6 +80,9 @@ def select_cases(args, config):
 
 
 def handle(args):
+    if args.output_dir is None:
+        category = "reports" if args.experiment_command == "report" else "experiments"
+        args.output_dir = default_run_path(category, args.experiment_command)
     if args.output_dir.exists():
         raise ValueError("output directory already exists")
     if args.experiment_command == "report":

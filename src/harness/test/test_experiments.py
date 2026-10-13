@@ -90,6 +90,12 @@ class ExperimentTest(EpisodeFixture):
             self.assertEqual(main(["experiments", "report", "--run-dir", str(output),
                                    "--output-dir", str(output / "reanalysis")]), 0)
         self.assertEqual(json.loads((output / "reanalysis/summary.json").read_text()), report)
+        with patch("src.harness.paths.OUTPUTS_DIR", Path(self.tmp.name) / "automatic"), \
+             redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(main(["experiments", "report", "--run-dir", str(output)]), 0)
+        generated = Path(json.loads(printed.getvalue())["output_dir"])
+        self.assertEqual(generated.parent, (Path(self.tmp.name) / "automatic/reports").resolve())
+        self.assertEqual(json.loads((generated / "summary.json").read_text()), report)
         with (output / "private/records.jsonl").open("a") as handle:
             handle.write("{}\n")
         with self.assertRaisesRegex(ValueError, "hash mismatch"):

@@ -1,0 +1,50 @@
+{
+  "artifacts": {
+    "path_base": "repository_root",
+    "runs_jsonl": "outputs/bm25/eval_20260911T112102Z/runs.jsonl",
+    "runs_jsonl_sha256": "0131188c45fa0ee722ce842e488c2ea2b9a8242b5c1e1887d9f777d19075a7fc",
+    "summary_json": "outputs/bm25/eval_20260911T112102Z/summary.json"
+  },
+  "configuration": {
+    "bm25_search_version": "shopsimulator-multifield-bm25-v3",
+    "model": "deepseek-v4-flash",
+    "pipeline_version": "bm25-top5-agent-v1",
+    "seed": "42",
+    "split": "eval",
+    "temperature": 0.0,
+    "thinking": "disabled",
+    "top_k": 5,
+    "workers": 8
+  },
+  "metrics": {
+    "asin_match_count": 966,
+    "asin_selection_rate_given_top5": 0.9333333333333333,
+    "average_reward": 0.6211446196024675,
+    "average_valid_reward": 0.6254313319530711,
+    "completed_count": 1455,
+    "completion_rate": 0.9972583961617546,
+    "evaluated_count": 1459,
+    "failed_count": 4,
+    "reward_coverage": 0.9931459904043866,
+    "reward_valid_count": 1449,
+    "strict_success_count": 888,
+    "strict_success_rate": 0.6086360520904729,
+    "strict_success_rate_given_asin_match": 0.9192546583850931,
+    "strict_success_rate_given_top5": 0.8579710144927536,
+    "task_count": 1459,
+    "top5_hit_count": 1035,
+    "top5_recall": 0.7093899931459904
+  },
+  "terminal_reason_counts": {
+    "invalid_agent_decision": 4,
+    "no_match": 488,
+    "partial_match": 73,
+    "strict_success": 888,
+    "unverifiable_task": 6
+  },
+  "usage": {
+    "input_tokens": 4096319,
+    "output_tokens": 331475,
+    "total_tokens": 4427794
+  }
+}

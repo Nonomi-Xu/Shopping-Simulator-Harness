@@ -2,10 +2,18 @@
 __pycache__/
 *.py[cod]
 .env
+.env.*
+!.env.example
 *.egg-info/
 /build/
 /dist/
+# All generated evaluations, audit bundles, reports, and BM25 runs.
 /outputs/
+# Legacy singular output directory; do not add a second results root.
+/output/
+/BM25/outputs
+.pytest_cache/
+.venv/
 
 # Local datasets, generated indexes, manifests, and previews.
 /data/

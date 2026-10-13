@@ -1,0 +1,19 @@
+{
+  "dataset": "harness/data/fine_items_eval_train_all.json",
+  "index": "harness/data/product_search.sqlite3",
+  "index_search_version": "shopsimulator-multifield-bm25-v3",
+  "split": "eval",
+  "task_count": 1459,
+  "target_rank_counts": {
+    "1": 704,
+    "2": 157,
+    "3": 88,
+    "4": 54,
+    "5": 32,
+    "miss": 424
+  },
+  "top5_hit_count": 1035,
+  "top5_recall": 0.7093899931459904,
+  "agent_evaluation_status": "not_run",
+  "agent_evaluation_note": "A DeepSeek API call was not made; an explicit authorization is required before sending local candidate data using credentials from harness/src/.env."
+}
