@@ -29,7 +29,9 @@ class DatasetSelectionTest(unittest.TestCase):
             self.assertEqual(len(test_ids), 500)
             self.assertTrue(set(test_ids) < set(all_ids))
             self.assertEqual(test_ids, TaskStore(path).list_task_ids("test"))
-            self.assertEqual(test_ids, [x for x in all_ids if x in set(test_ids)])
+            self.assertEqual(test_ids, all_ids[:500])
+            self.assertEqual(store.list_task_ids("Original"), all_ids)
+            self.assertEqual(store.list_task_ids("Test1"), test_ids)
             for product in products:
                 product["tag"] = "unused-source-label"
             path.write_text(json.dumps(products), encoding="utf-8")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from .schemas import (
 TASK_STORE_VERSION = "shopping-tasks-v2"
 TASK_ID_VERSION = "opaque-row-query-v1"
 OPTION_MATCH_VERSION = "nfkc-casefold-alnum-v1"
-VALID_SPLITS = ("all", "test")
+VALID_SPLITS = ("all", "test", "Original", "Test1")
 TEST_TASK_COUNT = 500
 TEST_TASK_SEED = 42
 OptionCandidate = tuple[str, str]
@@ -73,13 +74,10 @@ class TaskStore:
         # Count of tasks with at least one unresolved option value
         self._tasks_with_unresolved_options = 0
         self._load()
-        # Test is a reproducible smoke-test subset, also included in all.
-        test_ids = set(self.sample_task_ids(
-            "all", min(TEST_TASK_COUNT, len(self._task_ids_by_split["all"])), seed=TEST_TASK_SEED,
-        ))
-        self._task_ids_by_split["test"] = [
-            task_id for task_id in self._task_ids_by_split["all"] if task_id in test_ids
-        ]
+        # Dataset names are stable source-order selections; benchmark manifests freeze them.
+        self._task_ids_by_split["Original"] = list(self._task_ids_by_split["all"])
+        self._task_ids_by_split["Test1"] = self._task_ids_by_split["all"][:TEST_TASK_COUNT]
+        self._task_ids_by_split["test"] = list(self._task_ids_by_split["Test1"])
         self.product_data_sha256 = sha256_file(self.products_path)
 
     def __len__(self) -> int:
@@ -100,7 +98,9 @@ class TaskStore:
             },
             "test_subset": {
                 "count_limit": TEST_TASK_COUNT,
-                "seed": TEST_TASK_SEED,
+                "name": "Test1",
+                "selection": "source_order_first_500",
+                "seed": None,
                 "included_in_all": True,
                 "task_ids": self.list_task_ids("test"),
             },
@@ -120,7 +120,15 @@ class TaskStore:
     def list_task_ids(self, split: TaskSplit = "all") -> list[str]:
         """Return all tasks or the fixed Test subset in source order."""
         normalized_split = self._validated_split(split)
-        return list(self._task_ids_by_split[normalized_split])
+        ids = list(self._task_ids_by_split[normalized_split])
+        if split in ("Original", "Test1"):
+            root = Path(__file__).resolve().parents[3]
+            manifest_path = root / "datasets" / f"{split}.json"
+            if self.products_path == root / "harness/data/fine_items_eval_train_all.json" and manifest_path.exists():
+                frozen = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if frozen["source_sha256"] != self.product_data_sha256 or frozen["task_ids"] != ids:
+                    raise TaskDataError(f"frozen {split} dataset no longer matches its source")
+        return ids
 
     def iter_public_tasks(self, split: TaskSplit) -> Iterator[PublicTask]:
         """Iterate over safe actor tasks in frozen source order."""

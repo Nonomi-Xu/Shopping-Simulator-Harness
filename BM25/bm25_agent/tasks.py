@@ -12,8 +12,8 @@ from .types import PrivateTaskFacts, PublicTask, TaskSplit
 
 
 TASK_ID_VERSION = "opaque-row-query-v1"
-VALID_SPLITS = ("all", "test")
-TEST_TASK_COUNT = 10
+VALID_SPLITS = ("all", "test", "Original", "Test1")
+TEST_TASK_COUNT = 500
 TEST_TASK_SEED = 42
 
 
@@ -117,13 +117,11 @@ class TaskStore:
         self._private: dict[str, PrivateTaskFacts] = {}
         self._ids: dict[str, list[str]] = {split: [] for split in VALID_SPLITS}
         self._load()
-        # Test is a reproducible smoke-test subset, also included in all.
-        test_ids = set(self.sample_task_ids(
-            "all", min(TEST_TASK_COUNT, len(self._ids["all"])), seed=TEST_TASK_SEED,
-        ))
-        self._ids["test"] = [
-            task_id for task_id in self._ids["all"] if task_id in test_ids
-        ]
+        # Dataset names are stable source-order selections; benchmark manifests freeze them.
+        self._ids["Original"] = list(self._ids["all"])
+        self._ids["Test1"] = self._ids["all"][:TEST_TASK_COUNT]
+        self._ids["test"] = list(self._ids["Test1"])
+
 
     def _load(self) -> None:
         seen_asins: set[str] = set()
@@ -178,8 +176,22 @@ class TaskStore:
 
     def list_task_ids(self, split: TaskSplit = "all") -> list[str]:
         if split not in VALID_SPLITS:
-            raise ValueError("split must be all or test")
-        return list(self._ids[split])
+            raise ValueError("split must be Original, Test1, all or test")
+        ids = list(self._ids[split])
+        if split in ("Original", "Test1"):
+            root = Path(__file__).resolve().parents[2]
+            manifest_path = root / "datasets" / f"{split}.json"
+            if self.products_path == root / "harness/data/fine_items_eval_train_all.json" and manifest_path.exists():
+                frozen = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if not hasattr(self, "product_data_sha256"):
+                    digest = hashlib.sha256()
+                    with self.products_path.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    self.product_data_sha256 = digest.hexdigest()
+                if frozen["source_sha256"] != self.product_data_sha256 or frozen["task_ids"] != ids:
+                    raise ValueError(f"frozen {split} dataset no longer matches its source")
+        return ids
 
     def sample_task_ids(self, split: TaskSplit, count: int, seed: int | str) -> list[str]:
         available = self.list_task_ids(split)

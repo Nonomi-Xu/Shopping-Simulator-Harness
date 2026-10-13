@@ -36,7 +36,7 @@ def register(parent):
         p.add_argument("--no-env-file", action="store_true")
         if name == "prepare":
             p.add_argument("--parser", choices=("structured", "rule"), default="structured")
-            p.add_argument("--split", choices=("all", "test"), default="test")
+            p.add_argument("--split", choices=("Original", "Test1", "all", "test"), default="test")
             p.add_argument("--disclosure-policy", type=Path)
         else:
             p.add_argument("--output-dir", type=result_path, help="Exact new directory, relative to Shopping-Simulator repository; default: unique outputs directory.")

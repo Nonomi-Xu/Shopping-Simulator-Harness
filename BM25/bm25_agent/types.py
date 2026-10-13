@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-TaskSplit = Literal["all", "test"]
+TaskSplit = Literal["all", "test", "Original", "Test1"]
 
 
 @dataclass(frozen=True)

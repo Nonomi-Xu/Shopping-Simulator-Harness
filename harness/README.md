@@ -262,7 +262,7 @@ Actor 只能读取：
 
 Evaluator 独立读取目标 ASIN、目标类别、目标规格、属性、价格和数据来源位置。
 `task_id` 由源数据行号、指令序号和 Query 生成稳定的截断 SHA-256，但不会直接暴露
-目标商品 ASIN。运行集合使用 `all` 和固定的 `test` 子集，支持带 Seed 的确定性
+目标商品 ASIN。运行集合使用 `Original` 和冻结的 `Test1` 子集，支持带 Seed 的确定性
 采样；原始 `tag` 仅保留为来源信息。
 
 规格标注优先按原文精确匹配，再按共享的 NFKC、大小写与字母数字归一化规则匹配。
@@ -487,12 +487,15 @@ shopping-agent rollout \
   --output-root outputs/rollouts
 ```
 
-Harness 和 Agent 只使用 `all` 与 `test`，不再按原始 `tag` 划分 train/eval。
-`all` 覆盖所有任务；`test` 使用固定整数 Seed 42 从全量任务中按任务 ID 的 SHA-256
-排序选取 500 条（不足 500 条时全部选取），并按源数据顺序返回，用于验证通路。
-Test 是 all 的子集，仍计入全量检测；商品检索索引始终包含全部商品。
-数据准备 manifest 的 `tasks.test_subset` 记录 Test 的任务 ID、Seed 与数量上限。
-原始数据文件名和标签保留为来源信息，不参与任务筛选。
+正式数据集为 `Original`（源文件全部 23,421 个任务）和 `Test1`（源顺序第 1–500 题）。
+任务先按商品原始顺序、再按 instructions 顺序展开；冻结清单保存源 SHA-256 和完整任务 ID，
+位于顶层 `datasets/`，BM25 与 Harness 共用。旧 `all`/`test` 分别作为兼容入口；
+历史随机 test500 和 BM25 test10 不属于 Test1。商品检索始终使用完整商品库。
+可另冻结 Test2、Test3，已有不同清单不可覆盖。
+
+本次双方法评测使用内存受控的 `src.harness.benchmark.runner`，每题完成立即落盘并释放
+完整结果，模型请求/响应和 Agent 事件在执行过程中持续记录。
+运行、恢复、文件结构与指标定义见 [Original/Test1 全链路评测](docs/test1-benchmark.md)。
 
 省略 `--count` 运行所选集合的全部任务；指定时按 `--seed` 确定性抽样，
 不会改变固定 Test 集的成员。全量检测运行：
@@ -712,7 +715,7 @@ skills/
 - Runner 失败时保留 active Session 供审计，库调用方可显式 force release；Rollout 自动释放；
 - 候选与证据 Memory 为任务级；跨任务只保存用户显式偏好，尚未启用经验记忆；
 - 证据工具验证引用来源与引文，不证明模型的语义判断正确；
-- 事件在任务返回后写盘，支持明确等待用户时的文件恢复；尚不支持任意动作中的崩溃恢复；
+- 新 benchmark 和带 `--artifacts-dir` 的单题命令实时记录事件和模型 I/O；benchmark 支持任务级恢复，尚不支持任意模型轮次的无损恢复；
 - HTTP 来源是通用商品网关客户端，需接入实际网关；不含零售商专属集成、跨来源合并或购买操作；
 - 当前 Actor 搜索契约只接受 `method=bm25`；仓库保留可选向量索引组件和 CLI 参数，
   尚不能把它们视为已贯通的 Agent 向量检索能力，长程 benchmark 使用 BM25；

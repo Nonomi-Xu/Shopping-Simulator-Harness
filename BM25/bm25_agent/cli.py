@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_selection(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--split", choices=("all", "test"), default="all")
+    parser.add_argument("--split", choices=("Original", "Test1", "all", "test"), default="all")
     parser.add_argument("--count", type=_positive_int,
                         help="Optional sample size; omit to run the entire selection.")
     parser.add_argument("--seed", type=_seed, default=42)

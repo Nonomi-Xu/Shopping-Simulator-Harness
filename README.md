@@ -38,3 +38,11 @@ BM25 的两份历史基准汇总保留在 `BM25/results/`，用于文档引用�
 (cd BM25 && python -m unittest discover -s tests -v)
 (cd harness && python -m unittest discover -s src/harness/test -p 'test_*.py' -v)
 ```
+
+## Original / Test1 与新评测
+
+Original 为全部 23,421 题；Test1 冻结为原始任务顺序第 1–500 题。
+清单与后续 Test2 的冻结方法见 [datasets](datasets/README.md)。
+两种方法共用冻结 ID、源数据和商品索引；新 benchmark 逐题实时记录完整链路，
+只在内存中保留并发任务的完整轨迹。运行与离线报告见
+[评测说明](harness/docs/test1-benchmark.md)。

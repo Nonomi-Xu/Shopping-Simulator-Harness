@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .constraints import Predicate
 
 
-TaskSplit = Literal["all", "test"]
+TaskSplit = Literal["all", "test", "Original", "Test1"]
 EvaluationTerminalReason = Literal[
     "strict_success",
     "partial_match",

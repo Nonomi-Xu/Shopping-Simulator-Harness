@@ -25,6 +25,7 @@ from .agent import (
     PreferenceStore,
 )
 from .agent.artifacts import replay_run, write_run_artifacts
+from .agent.audit import RunAudit
 from .paths import HARNESS_DIR, OUTPUTS_DIR, result_path
 from .catalog import CatalogError
 from .env import DotEnvError, load_dotenv
@@ -119,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     selection = rollout_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument(
         "--split",
-        choices=("all", "test"),
+        choices=("Original", "Test1", "all", "test"),
         help="all: every task; test: fixed smoke-test subset.",
     )
     selection.add_argument(
@@ -546,6 +547,10 @@ def _run_command(args: argparse.Namespace) -> int:
         if output is not None and output.expanduser().exists():
             raise CLIError(f"refusing to overwrite existing output: {output}")
     skill = load_agent_skill(args.skill_dir)
+    audit = RunAudit(args.artifacts_dir) if args.artifacts_dir is not None else None
+    provider = _build_provider(args)
+    if audit is not None:
+        provider.request_observer = audit.transport
     with ShoppingHarness(
         products_path=args.products_path,
         index_path=args.index_path,
@@ -553,7 +558,7 @@ def _run_command(args: argparse.Namespace) -> int:
         **_vector_options(args),
     ) as harness:
         result = AgentRunner(
-            provider=_build_provider(args),
+            provider=provider,
             harness=harness,
             skill=skill,
             max_model_turns=args.max_model_turns,
@@ -561,9 +566,10 @@ def _run_command(args: argparse.Namespace) -> int:
             config=args.runtime_config,
             profile=args.agent_profile,
             user_profile=args.user_profile,
+            event_observer=audit,
         ).run(args.task_id, max_steps=args.max_steps)
-    if args.artifacts_dir is not None:
-        write_run_artifacts(result, args.artifacts_dir)
+    if audit is not None:
+        audit.finish(result)
     payload = result.model_dump_json(indent=2)
     if args.output is None:
         print(payload)

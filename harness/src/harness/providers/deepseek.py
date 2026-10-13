@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlsplit
 
 from pydantic import ValidationError
 
@@ -87,6 +88,7 @@ class DeepSeekProvider:
         default_parameters: Mapping[str, Any] | None = None,
         opener: Callable[..., Any] | None = None,
         sleeper: Callable[[float], None] | None = None,
+        request_observer=None,
     ) -> None:
         resolved_key = api_key or _api_key_from_environment()
         if not resolved_key or not resolved_key.strip():
@@ -118,6 +120,7 @@ class DeepSeekProvider:
                 f"reserved default parameter(s): {names}"
             )
 
+        self.request_observer = request_observer
         self._api_key = resolved_key.strip()
         self._model = model.strip()
         self.base_url = base_url.rstrip("/")
@@ -256,10 +259,15 @@ class DeepSeekProvider:
 
     def _send(self, request: Request) -> dict[str, Any]:
         for attempt in range(self.max_retries + 1):
+            if self.request_observer is not None:
+                self.request_observer("request", {"attempt": attempt + 1, "url": request.full_url,
+                                                  "body": json.loads(request.data)})
             try:
-                with self._opener(request, timeout=self.timeout) as response:
+                with self._open_with_redirects(request) as response:
                     result = json.loads(response.read().decode("utf-8"))
             except HTTPError as error:
+                if self.request_observer is not None:
+                    self.request_observer("error", {"type": "HTTPError", "status": error.code, "attempt": attempt + 1})
                 retryable = (
                     error.code in _RETRYABLE_STATUS_CODES or error.code >= 500
                 )
@@ -273,6 +281,8 @@ class DeepSeekProvider:
                     continue
                 raise api_error from error
             except (URLError, TimeoutError, OSError) as error:
+                if self.request_observer is not None:
+                    self.request_observer("error", {"type": type(error).__name__, "message": str(error), "attempt": attempt + 1})
                 reason = getattr(error, "reason", error)
                 api_error = DeepSeekAPIError(
                     f"DeepSeek API request failed: {reason}",
@@ -283,16 +293,44 @@ class DeepSeekProvider:
                     continue
                 raise api_error from error
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                if self.request_observer is not None:
+                    self.request_observer("error", {"type": type(error).__name__, "attempt": attempt + 1})
                 raise DeepSeekResponseError(
                     "DeepSeek API returned invalid JSON"
                 ) from error
 
+            if self.request_observer is not None:
+                self.request_observer("response", {"attempt": attempt + 1, "body": result})
             if not isinstance(result, dict):
                 raise DeepSeekResponseError(
                     "DeepSeek API response must be a JSON object"
                 )
             return result
         raise AssertionError("retry loop exhausted without returning or raising")
+
+    def _open_with_redirects(self, request):
+        """Preserve POST on bounded same-origin HTTPS 307/308 redirects."""
+        original = urlsplit(request.full_url)
+        for redirect_count in range(4):
+            try:
+                return self._opener(request, timeout=self.timeout)
+            except HTTPError as error:
+                if error.code not in (307, 308):
+                    raise
+                location = error.headers.get("Location") if error.headers else None
+                target = urljoin(request.full_url, location or "")
+                parsed = urlsplit(target)
+                if (not location or redirect_count >= 3 or parsed.scheme != "https"
+                    or (parsed.hostname, parsed.port) != (original.hostname, original.port)
+                    or parsed.username or parsed.password):
+                    raise
+                if self.request_observer is not None:
+                    self.request_observer("redirect", {"status": error.code,
+                        "from": request.full_url, "to": target})
+                error.close()
+                request = Request(target, data=request.data, headers=dict(request.header_items()),
+                                  method=request.get_method())
+        raise AssertionError("redirect loop exhausted")
 
     def _wait_before_retry(self, attempt: int) -> None:
         delay = self.retry_backoff * (2**attempt)

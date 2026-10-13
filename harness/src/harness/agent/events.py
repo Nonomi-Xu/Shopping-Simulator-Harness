@@ -27,8 +27,9 @@ def digest(value: Any) -> str:
 class EventStore:
     version = "shopping-event-v1"
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, observer=None):
         self.session_id = session_id
+        self.observer = observer
         self._events: list[AgentEvent] = []
 
     @property
@@ -54,6 +55,8 @@ class EventStore:
             "previous_hash": self._events[-1].event_hash if self._events else "0" * 64,
         }
         event = AgentEvent(**values, event_hash=digest(values))
+        if self.observer is not None:
+            self.observer(event.model_copy(deep=True))
         self._events.append(event.model_copy(deep=True))
         return event
 

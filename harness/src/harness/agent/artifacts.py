@@ -1,19 +1,29 @@
 """Immutable per-run audit bundles and verified offline replay."""
 
 import json
+from itertools import zip_longest
 from pathlib import Path
 
 from .contracts import AgentEvent, AgentRunResult
 from .events import replay_events
 
 
-def write_run_artifacts(result: AgentRunResult, directory: str | Path) -> Path:
+def write_run_artifacts(result: AgentRunResult, directory: str | Path, *, streamed: bool = False) -> Path:
     if result.status == "waiting_for_user":
         from .orchestrator import validate_checkpoint
 
         validate_checkpoint(result)
     path = Path(directory).expanduser().resolve()
-    path.mkdir(parents=True, exist_ok=False)
+    if streamed:
+        # Reuse only a matching live journal, never a completed or unrelated bundle.
+        if (path / "run_manifest.json").exists():
+            raise FileExistsError("audit bundle is already complete")
+        with (path / "events.jsonl").open(encoding="utf-8") as handle:
+            for line, event in zip_longest(handle, result.events):
+                if line is None or event is None or AgentEvent.model_validate_json(line) != event:
+                    raise ValueError("live event journal differs from completed run")
+    else:
+        path.mkdir(parents=True, exist_ok=False)
     payloads = {
         "profile.json": {
             "agent": result.profile.model_dump(mode="json"),
@@ -50,9 +60,10 @@ def write_run_artifacts(result: AgentRunResult, directory: str | Path) -> Path:
     }
     if result.status == "waiting_for_user":
         payloads["checkpoint.json"] = result.model_dump(mode="json")
-    with (path / "events.jsonl").open("x", encoding="utf-8") as handle:
-        for event in result.events:
-            handle.write(event.model_dump_json() + "\n")
+    if not streamed:
+        with (path / "events.jsonl").open("x", encoding="utf-8") as handle:
+            for event in result.events:
+                handle.write(event.model_dump_json() + "\n")
     for name, payload in payloads.items():
         with (path / name).open("x", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)

@@ -57,7 +57,7 @@ python -m unittest discover -s tests -v
 ## 1. 先测 BM25 Top-5 召回率（不调用模型）
 
 ```bash
-bm25-agent recall --split all
+bm25-agent recall --split Original
 ```
 
 历史 Harness eval 子集（1,459 题）的实测 Top-5 recall 为
@@ -97,18 +97,22 @@ bm25-agent run --task-id task_xxxxxxxxxxxxxxxxxxxxxxxx
 
 ```bash
 bm25-agent evaluate \
-  --split test \
+  --split Test1 \
   --workers 4
 ```
 
-Harness 与 BM25 Agent 统一使用 `all`（全量）和 `test`（通路测试），忽略原始
-train/eval 标签。Test 使用固定整数 Seed 42 抽取 10 条任务（不足时取全部），
-两边选出的任务 ID 一致，且 Test 仍包含在 all 中；检索始终使用完整商品库。
+数据集正式名称为 `Original`（23,421 题）和 `Test1`（原始任务顺序第 1–500 题）。
+冻结清单位于仓库 `datasets/Original.json`、`datasets/Test1.json`；两种方法使用同一组
+任务 ID 与顺序，源哈希不匹配时拒绝命名数据集评测。旧 `all`/`test` 为兼容入口，
+分别对应 Original/Test1；旧随机 test 与 test10 的结果不属于新 Test1。
+检索始终使用完整商品库。新的双方法全链路评测见
+[冻结数据集与评测说明](../harness/docs/test1-benchmark.md)。
+
 省略 `--count` 运行所选集合全部任务；指定时可用 `--seed` 从该集合抽样。
 执行全量 Agent 检测：
 
 ```bash
-bm25-agent evaluate --split all --workers 32
+bm25-agent evaluate --split Original --workers 32
 ```
 
 默认结果目录由代码定位仓库根目录后生成绝对路径：
@@ -131,7 +135,7 @@ CLI 在任务开始前向 stderr 打印绝对目录，结束时在 stdout 的 `o
 
 ```bash
 bm25-agent evaluate \
-  --split all \
+  --split Original \
   --workers 32 \
   --resume-dir /absolute/path/to/Shopping-Simulator/outputs/bm25/evaluations/all_<首次运行ID>
 ```

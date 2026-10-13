@@ -23,7 +23,7 @@ def register(parent):
     run.add_argument("--products-path", type=Path, default=HARNESS_DIR / "data/fine_items_eval_train_all.json")
     run.add_argument("--index-path", type=Path, default=HARNESS_DIR / "data/product_search.sqlite3")
     run.add_argument("--cache", type=Path)
-    run.add_argument("--split", choices=("all", "test"), default="test")
+    run.add_argument("--split", choices=("Original", "Test1", "all", "test"), default="test")
     run.add_argument("--count", type=int, default=10, help="fixed case count; 0 selects all")
     selected = run.add_mutually_exclusive_group()
     selected.add_argument("--task-id", action="append")

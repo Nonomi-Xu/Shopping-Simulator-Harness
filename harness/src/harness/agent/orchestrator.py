@@ -80,6 +80,7 @@ class AgentOrchestrator:
         config: RuntimeConfig | None = None,
         profile: AgentProfile | None = None,
         user_profile: UserProfile | None = None,
+        event_observer=None,
     ):
         if skill is not None and skill_dir is not None:
             raise ValueError("pass skill or skill_dir, not both")
@@ -91,6 +92,7 @@ class AgentOrchestrator:
             raise TypeError("provider must implement ModelProvider")
         if not isinstance(harness, HarnessRuntime):
             raise TypeError("harness must implement HarnessRuntime")
+        self.event_observer = event_observer
         self.provider = provider
         self.harness = harness
         self.skill = skill or load_agent_skill(skill_dir)
@@ -211,7 +213,7 @@ class _Run:
         self.task = TaskProfile(task=snapshot.public_task)
         self.plan = owner.planner.start(self.task, self.session_id)
         self.memory = MemoryStore(self.session_id)
-        self.events = EventStore(self.session_id)
+        self.events = EventStore(self.session_id, observer=owner.event_observer)
         self.turns: list[AssistantTurn] = []
         self.messages = [
             ChatMessage(role="system", content=owner.skill.system_prompt),
@@ -287,7 +289,7 @@ class _Run:
         run.plan = paused.plan.model_copy(deep=True)
         run.memory = MemoryStore(run.session_id)
         run.memory.state = paused.memory.model_copy(deep=True)
-        run.events = EventStore(run.session_id)
+        run.events = EventStore(run.session_id, observer=owner.event_observer)
         run.events._events = [e.model_copy(deep=True) for e in paused.events]
         run.repeated = Counter()
         for event in paused.events:
@@ -494,6 +496,7 @@ class _Run:
                 {
                     "turn_number": len(self.turns),
                     "agent_role": self.coordinator.role if self.coordinator else "single",
+                    "response": turn.model_dump(mode="json"),
                     "tool_calls": [c.model_dump(mode="json") for c in turn.tool_calls],
                     "usage": turn.usage.model_dump(mode="json") if turn.usage else None,
                 },
