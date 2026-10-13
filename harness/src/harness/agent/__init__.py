@@ -56,15 +56,15 @@ from .contracts import (
 from .orchestrator import AgentOrchestrator
 from .events import replay_events
 from .artifacts import write_run_artifacts, replay_run
-from .preferences import PreferenceStore, PreferenceConflict
+
+# PreferenceStore lives in src.harness.branch.preferences; the mainline agent
+# package must not depend on the branch. Import it from there explicitly.
 
 __all__ = [
     "AskUser",
     "UserReply",
     "UserMessage",
     "PendingQuestion",
-    "PreferenceStore",
-    "PreferenceConflict",
     "CompareProducts",
     "VerifySelection",
     "ActionProposal",

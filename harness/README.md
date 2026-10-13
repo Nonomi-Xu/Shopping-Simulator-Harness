@@ -159,6 +159,37 @@ flowchart LR
 | 实验评测 | 固定任务 × 重复 × 配置，配对统计及报告重建 | `shopping-agent experiments` |
 | 命令行 | 运行任务、交互、Episode 和实验，写入审计产物 | `shopping-agent` |
 
+## 代码布局：主线与可选支线
+
+源码分成两部分，边界是**单向**的：支线可以依赖主线，主线不得依赖支线。
+
+```text
+src/harness/                    离线 Test1 主线
+  catalog.py session.py tasks.py evaluator.py schemas.py constraints.py
+  harness.py env.py paths.py sources.py cli.py
+  agent/                        Runtime v5（含 multiagent.py）
+  benchmark/                    Test1 冻结数据集、并发评测、配对报告
+  providers/                    Provider 协议与 DeepSeek 实现
+  api/                          旧接口兼容层
+  test/                         主线测试
+
+src/harness/branch/             可选交互支线
+  interactive.py                无标注真实 query、ask_user / resume
+  preferences.py                显式长期偏好（SQLite CAS）
+  episodes/                     隐藏需求缓存、逐步披露、用户模拟、长程指标
+  experiments/                  任务 × 重复 × 配置矩阵与配对统计
+  test/                         支线测试
+```
+
+主线 → 支线只有一处受控入口：`src/harness/cli.py` 的 `load_branch()`。它以
+`try/except ImportError` 加载支线；支线缺失时 `chat` / `resume` / `preferences` /
+`episodes` / `experiments` 子命令不注册，其余命令不受影响。因此
+**删除整个 `src/harness/branch/` 目录，主线仍然完整可用**。
+`src/harness/test/test_branch_boundary.py` 在独立解释器中屏蔽支线导入来验证这一点，
+并静态检查没有其他主线模块 import 支线。
+
+在 Test1 主线上迭代时，只需运行主线测试；支线测试单独运行即可（见文末）。
+
 ## 核心设计
 
 ### 用户交互、长期偏好与公开商品源
@@ -633,15 +664,23 @@ Episode 模式还包含交互和约束指标。重复运行先在同一任务内
 
 ## 运行测试
 
+主线（离线 Test1 评测，不依赖可选支线）：
+
 ```bash
 python -m unittest discover -s src/harness/test -p "test_*.py" -v
+```
+
+可选交互支线（需求逐步披露、用户模拟、长程 Episode、配对实验）：
+
+```bash
+python -m unittest discover -s src/harness/branch/test -p "test_*.py" -v
 ```
 
 当前测试覆盖公开字段防泄漏、BM25 顺序、索引与 Manifest 校验、任务规格归一化、
 Evaluator 各终局分支、Agent 完整工具循环与失败边界，以及 Provider 消息契约、
 DeepSeek 工具调用解析、Token Usage、重试和错误处理，以及 `.env` 加载、
 Rollout 采样、并发顺序、逐任务消耗、指标聚合、原子化产物写入和 CLI 参数校验。
-扩展测试还覆盖计划与证据、交互恢复、偏好版本、SQL 约束过滤、Episode 缓存与披露、
+支线测试覆盖计划与证据、交互恢复、偏好版本、SQL 约束过滤、Episode 缓存与披露、
 Actor 输入防泄漏、长程指标及实验统计/报告重建。未解析规格扫描脚本是数据诊断工具，
 不会调用外部 API。
 
@@ -717,8 +756,9 @@ skills/
 - 证据工具验证引用来源与引文，不证明模型的语义判断正确；
 - 新 benchmark 和带 `--artifacts-dir` 的单题命令实时记录事件和模型 I/O；benchmark 支持任务级恢复，尚不支持任意模型轮次的无损恢复；
 - HTTP 来源是通用商品网关客户端，需接入实际网关；不含零售商专属集成、跨来源合并或购买操作；
-- 当前 Actor 搜索契约只接受 `method=bm25`；仓库保留可选向量索引组件和 CLI 参数，
-  尚不能把它们视为已贯通的 Agent 向量检索能力，长程 benchmark 使用 BM25；
+- 当前 Actor 搜索契约只接受 `method=bm25`；仓库保留可选向量索引的构建组件
+  （`vector-index` 子命令），但未接入 Agent 检索，运行命令也不再接受相关参数，
+  长程 benchmark 使用 BM25；
 - 需求解析的引用与 Schema 校验不证明语义提取正确；规则解析器只覆盖有限词汇；
 - 实验与 Episode 对比会保留已完成记录，但尚不支持中断后自动续跑；
 - 无法唯一解析的 Gold 规格会 Fail Closed，并返回 `reward_valid=false`。

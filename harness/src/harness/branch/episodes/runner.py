@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from pydantic import Field
-from ..agent import AgentRunner, RuntimeConfig
-from ..agent.contracts import Contract, AgentRunResult, UserReply
-from ..agent.events import digest
-from ..catalog import ProductCatalog
-from ..evaluator import evaluate_submission
-from ..schemas import EvaluationResult, SubmitRecommendationsAction
-from ..tasks import TaskStore
+from ...agent import AgentRunner, RuntimeConfig
+from ...agent.contracts import Contract, AgentRunResult, UserReply
+from ...agent.events import digest
+from ...catalog import ProductCatalog
+from ...evaluator import evaluate_submission
+from ...schemas import EvaluationResult, SubmitRecommendationsAction
+from ...tasks import TaskStore
 from .environment import EpisodeEnvironment
 from .models import EpisodeConfig, ShoppingEpisode, Trajectory, DisclosureEvent
 from .simulator import DeterministicSimulator
@@ -97,8 +97,8 @@ class EpisodeRunner:
                 "config": self.config.model_dump(mode="json"), "baseline": baseline,
                 "simulator": simulator.manifest, "parser": episode.parser_manifest, "runtime": run.manifest}
             manifest["evaluation_error"] = evaluation_error
-            from ...data.product_facts import FACTS_VERSION
-            from ...data.search_bm25 import sha256_file
+            from ....data.product_facts import FACTS_VERSION
+            from ....data.search_bm25 import sha256_file
             manifest.update(public_predicates_version=FACTS_VERSION, index_sha256=sha256_file(self.index_path))
             metrics = compute_metrics(MetricContext(episode, trajectory, evaluation, disclosures,
                 simulator.state.revealed_fields, env._catalog))

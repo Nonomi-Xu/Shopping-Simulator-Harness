@@ -32,7 +32,7 @@ include = ["src", "src.*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"src.harness.episodes" = ["prompts/*.md", "topics.json"]
+"src.harness.branch.episodes" = ["prompts/*.md", "topics.json"]
 
 [tool.setuptools.data-files]
 "share/shopping-simulator-harness/skills/shopping-agent" = [

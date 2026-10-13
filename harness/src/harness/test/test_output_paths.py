@@ -9,17 +9,17 @@ from src.harness.cli import build_parser
 from src.harness import paths
 from src.harness.agent.rollout import _prepare_output_dir, _resolve_rollout_id, RolloutError
 
+BRANCH_ROOT = Path(__file__).resolve().parents[1] / "branch"
+
 
 class OutputPathsTest(unittest.TestCase):
     def test_output_and_replay_paths_are_project_relative(self):
+        """Offline commands resolve result paths against the project root."""
         cases = [
             (['run', '--task-id', 'x', '--output', 'outputs/result.json'], 'output', 'outputs/result.json'),
             (['run', '--task-id', 'x', '--artifacts-dir', 'outputs/audit'], 'artifacts_dir', 'outputs/audit'),
             (['rollout', '--split', 'test', '--output-root', 'outputs/custom'], 'output_root', 'outputs/custom'),
             (['replay', '--run-dir', 'outputs/old-run'], 'run_dir', 'outputs/old-run'),
-            (['episodes', 'replay', '--run-dir', 'outputs/episode'], 'run_dir', 'outputs/episode'),
-            (['episodes', 'run', '--cache', 'cache.db', '--output-dir', 'outputs/episode'], 'output_dir', 'outputs/episode'),
-            (['experiments', 'report', '--run-dir', 'outputs/experiment', '--output-dir', 'outputs/report'], 'output_dir', 'outputs/report'),
         ]
         original = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -35,6 +35,25 @@ class OutputPathsTest(unittest.TestCase):
                 self.assertEqual(paths.PROJECT_DIR, Path(__file__).resolve().parents[4])
                 self.assertEqual(defaults.products_path, paths.PROJECT_DIR / "harness/data/fine_items_eval_train_all.json")
                 self.assertEqual(paths.result_path('/tmp/explicit'), Path('/tmp/explicit').resolve())
+            finally:
+                os.chdir(original)
+
+    @unittest.skipUnless(BRANCH_ROOT.is_dir(), "interaction branch is not installed")
+    def test_branch_subcommand_output_paths(self):
+        """Branch commands resolve result paths against the project root too."""
+        cases = [
+            (['episodes', 'replay', '--run-dir', 'outputs/episode'], 'run_dir', 'outputs/episode'),
+            (['episodes', 'run', '--cache', 'cache.db', '--output-dir', 'outputs/episode'], 'output_dir', 'outputs/episode'),
+            (['experiments', 'report', '--run-dir', 'outputs/experiment', '--output-dir', 'outputs/report'], 'output_dir', 'outputs/report'),
+        ]
+        original = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                parser = build_parser()
+                for command, field, relative in cases:
+                    with self.subTest(command=command):
+                        self.assertEqual(getattr(parser.parse_args(command), field), paths.PROJECT_DIR / relative)
                 self.assertIsNone(parser.parse_args(['experiments', 'run', '--config', 'x']).output_dir)
                 self.assertIsNone(parser.parse_args(['episodes', 'compare', '--cache', 'x']).output_dir)
             finally:

@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from pydantic import Field, model_validator
-from ..agent.contracts import Contract, Constraint, AgentAction, AgentObservation
-from ..constraints import Predicate
-from ..schemas import PublicTask, RecommendationItem
+from ...agent.contracts import Contract, Constraint, AgentAction, AgentObservation
+from ...constraints import Predicate
+from ...schemas import PublicTask, RecommendationItem
 
 
 class GoalRequirement(Contract):

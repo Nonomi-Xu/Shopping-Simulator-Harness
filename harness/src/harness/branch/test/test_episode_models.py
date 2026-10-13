@@ -1,7 +1,7 @@
 import unittest
 from pydantic import ValidationError
 from src.harness.constraints import Predicate
-from src.harness.episodes.models import UserGoal, GoalRequirement, DisclosureState
+from src.harness.branch.episodes.models import UserGoal, GoalRequirement, DisclosureState
 from src.harness.schemas import SearchProductsAction
 from src.harness.agent.tools import ToolRegistry
 

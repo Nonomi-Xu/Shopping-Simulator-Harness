@@ -1,8 +1,8 @@
 """Reproducible user replies. Simulator objects have no target-product capability."""
 from typing import Literal
-from ..agent.contracts import Contract
-from ..agent.events import digest
-from ..providers import ChatMessage, ToolDefinition
+from ...agent.contracts import Contract
+from ...agent.events import digest
+from ...providers import ChatMessage, ToolDefinition
 from .models import UserGoal, DisclosurePolicy, DisclosureState, DisclosureEvent
 from .disclosure import TOPICS, question_topics
 

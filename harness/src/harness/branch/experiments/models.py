@@ -3,9 +3,9 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from ..agent.contracts import Contract, RuntimeConfig
+from ...agent.contracts import Contract, RuntimeConfig
 from ..episodes.models import EpisodeConfig
-from ..providers import DEFAULT_BASE_URL
+from ...providers import DEFAULT_BASE_URL
 
 
 class Variant(Contract):

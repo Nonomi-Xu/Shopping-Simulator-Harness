@@ -1,16 +1,16 @@
 import json
 from pathlib import Path
-from src.harness.test.test_episode_runner import EpisodeFixture
+from src.harness.branch.test.test_episode_runner import EpisodeFixture
 from src.harness.test.test_agent_runner import tool_turn
-from src.harness.episodes.models import EpisodeConfig
-from src.harness.episodes.artifacts import write_episode_artifacts, replay_episode
-from src.harness.episodes.metrics import summarize, compute_metrics, MetricContext
+from src.harness.branch.episodes.models import EpisodeConfig
+from src.harness.branch.episodes.artifacts import write_episode_artifacts, replay_episode
+from src.harness.branch.episodes.metrics import summarize, compute_metrics, MetricContext
 
 
 class LongHorizonMetricsTest(EpisodeFixture):
     def test_ranked_success_violation_and_unknown_coverage(self):
         from examples.long_horizon_demo import DemoProvider
-        from src.harness.episodes.runner import EpisodeRunner
+        from src.harness.branch.episodes.runner import EpisodeRunner
         from src.harness.catalog import ProductCatalog
         from src.harness.schemas import RecommendationItem, SubmitRecommendationsAction
         from src.harness.evaluator import evaluate_submission

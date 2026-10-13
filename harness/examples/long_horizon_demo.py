@@ -7,12 +7,12 @@ from src.harness.paths import result_path
 from src.data.search_bm25 import build_index, sha256_file
 from src.harness.tasks import TaskStore
 from src.harness.providers import AssistantTurn, ToolCall, TokenUsage
-from src.harness.episodes.parser import RuleGoalParser
-from src.harness.episodes.preprocess import prepare_episodes
-from src.harness.episodes.store import EpisodeStore
-from src.harness.episodes.runner import EpisodeRunner
-from src.harness.episodes.baselines import run_comparison
-from src.harness.episodes.artifacts import replay_episode
+from src.harness.branch.episodes.parser import RuleGoalParser
+from src.harness.branch.episodes.preprocess import prepare_episodes
+from src.harness.branch.episodes.store import EpisodeStore
+from src.harness.branch.episodes.runner import EpisodeRunner
+from src.harness.branch.episodes.baselines import run_comparison
+from src.harness.branch.episodes.artifacts import replay_episode
 
 
 class DemoProvider:

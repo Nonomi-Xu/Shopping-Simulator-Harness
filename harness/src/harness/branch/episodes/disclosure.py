@@ -1,7 +1,7 @@
 """Question routing uses a versioned public vocabulary, never a fixed goal order."""
 import json
 from pathlib import Path
-from ...data.NFKC import normalize_query
+from ....data.NFKC import normalize_query
 
 TOPICS = json.loads(Path(__file__).with_name("topics.json").read_text())
 

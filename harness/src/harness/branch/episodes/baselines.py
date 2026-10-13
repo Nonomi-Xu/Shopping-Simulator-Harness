@@ -21,8 +21,8 @@ def run_comparison(episodes, runner_factory, output_dir):
         signatures = []
         for baseline in compact:
             runner = runner_factory()
-            from ..agent.skill import load_agent_skill
-            from ...data.search_bm25 import sha256_file
+            from ...agent.skill import load_agent_skill
+            from ....data.search_bm25 import sha256_file
             signatures.append((runner.provider.name, runner.provider.model, runner.provider_parameters,
                 getattr(runner.provider, "default_parameters", {}), getattr(runner.provider, "base_url", None),
                 runner.config, runner.runtime, load_agent_skill(runner.skill_dir).source_sha256,

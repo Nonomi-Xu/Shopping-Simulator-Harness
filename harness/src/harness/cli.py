@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from typing import Any, Sequence
 
 from .agent import (
@@ -22,7 +23,6 @@ from .agent import (
     RuntimeConfig,
     AgentRunResult,
     UserReply,
-    PreferenceStore,
 )
 from .agent.artifacts import replay_run, write_run_artifacts
 from .agent.audit import RunAudit
@@ -37,7 +37,6 @@ from .providers import (
     ProviderError,
 )
 from .tasks import TaskStoreError
-from .interactive import InteractiveHarness
 from .sources import JsonProductSource, HttpProductSource
 
 
@@ -50,16 +49,40 @@ class CLIError(RuntimeError):
     """A user-facing command configuration or output error."""
 
 
+def load_branch():
+    """Return the optional interaction branch, or ``None`` when it is absent.
+
+    The branch (``interactive`` / ``episodes`` / ``experiments`` / long-term
+    preferences) is deliberately not part of the offline Test1 mainline.
+    Importing it here is the only mainline -> branch edge, and it is optional:
+    deleting ``src/harness/branch/`` leaves every offline command working and
+    simply removes the branch subcommands from the CLI.
+    """
+    try:
+        from .branch.episodes import cli as episodes_cli
+        from .branch.experiments import cli as experiments_cli
+        from .branch.interactive import InteractiveHarness
+        from .branch.preferences import PreferenceStore
+    except ImportError:
+        return None
+    return SimpleNamespace(
+        episodes_cli=episodes_cli,
+        experiments_cli=experiments_cli,
+        InteractiveHarness=InteractiveHarness,
+        PreferenceStore=PreferenceStore,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shopping-agent",
         description="Run Shopping Harness agents and deterministic rollouts.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    from .episodes.cli import register
-    register(subparsers)
-    from .experiments.cli import register as register_experiments
-    register_experiments(subparsers)
+    branch = load_branch()
+    if branch is not None:
+        branch.episodes_cli.register(subparsers)
+        branch.experiments_cli.register(subparsers)
     common = argparse.ArgumentParser(add_help=False)
     _add_common_arguments(common)
 
@@ -80,37 +103,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the result JSON to a new file instead of stdout.",
     )
 
-    chat_parser = subparsers.add_parser(
-        "chat", parents=[common], help="Start an unlabelled interactive shopping task."
-    )
-    chat_parser.add_argument("--query", required=True)
-    _add_interactive_arguments(chat_parser)
-    chat_parser.add_argument("--preferences-db", type=Path)
-    chat_parser.add_argument("--profile-id")
-    resume_parser = subparsers.add_parser(
-        "resume",
-        parents=[common],
-        help="Resume a waiting interactive audit bundle with a real user reply.",
-    )
-    resume_parser.add_argument("--run-dir", type=result_path, required=True)
-    resume_parser.add_argument("--reply", required=True)
-    resume_parser.add_argument(
-        "--replace-constraint-id",
-        action="append",
-        default=[],
-        dest="replace_constraint_ids",
-    )
-    _add_interactive_arguments(resume_parser)
+    if branch is not None:
+        chat_parser = subparsers.add_parser(
+            "chat",
+            parents=[common],
+            help="Start an unlabelled interactive shopping task.",
+        )
+        chat_parser.add_argument("--query", required=True)
+        _add_interactive_arguments(chat_parser)
+        chat_parser.add_argument("--preferences-db", type=Path)
+        chat_parser.add_argument("--profile-id")
+        resume_parser = subparsers.add_parser(
+            "resume",
+            parents=[common],
+            help="Resume a waiting interactive audit bundle with a real user reply.",
+        )
+        resume_parser.add_argument("--run-dir", type=result_path, required=True)
+        resume_parser.add_argument("--reply", required=True)
+        resume_parser.add_argument(
+            "--replace-constraint-id",
+            action="append",
+            default=[],
+            dest="replace_constraint_ids",
+        )
+        _add_interactive_arguments(resume_parser)
 
-    prefs = subparsers.add_parser(
-        "preferences", help="Explicitly view, set or remove long-term user preferences."
-    )
-    prefs.add_argument("operation", choices=("show", "set", "remove", "history"))
-    prefs.add_argument("--db", type=Path, required=True)
-    prefs.add_argument("--profile-id", required=True)
-    prefs.add_argument("--name")
-    prefs.add_argument("--value")
-    prefs.add_argument("--expected-revision", type=_non_negative_int)
+        prefs = subparsers.add_parser(
+            "preferences",
+            help="Explicitly view, set or remove long-term user preferences.",
+        )
+        prefs.add_argument("operation", choices=("show", "set", "remove", "history"))
+        prefs.add_argument("--db", type=Path, required=True)
+        prefs.add_argument("--profile-id", required=True)
+        prefs.add_argument("--name")
+        prefs.add_argument("--value")
+        prefs.add_argument("--expected-revision", type=_non_negative_int)
 
     rollout_parser = subparsers.add_parser(
         "rollout",
@@ -193,10 +220,6 @@ def _add_interactive_arguments(parser):
     )
     parser.add_argument("--source-timeout", type=_positive_float, default=15.0)
     parser.add_argument(
-        "--source-search-methods", nargs="+", choices=("bm25", "vector"),
-        default=None, help="HTTP gateway's explicitly supported methods (default: bm25).",
-    )
-    parser.add_argument(
         "--artifacts-dir",
         type=result_path,
         required=True,
@@ -209,11 +232,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--agent-mode", choices=("single", "multi"), default=None,
         help="multi uses planner/executor/observer; new chat tasks default to multi.",
     )
-    parser.add_argument(
-        "--vector-index", type=Path,
-        help="Prepared vector index for this exact SQLite catalog or public JSON file.",
-    )
-    _add_embedding_arguments(parser)
     parser.add_argument(
         "--runtime-config",
         type=Path,
@@ -331,23 +349,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        if args.command == "episodes":
-            from .episodes.cli import handle
-            return handle(args)
-        if args.command == "experiments":
-            from .experiments.cli import handle
-            return handle(args)
+        if args.command in {"episodes", "experiments", "preferences", "chat", "resume"}:
+            # Only reachable when the optional branch registered these subcommands.
+            branch = load_branch()
+            if branch is None:
+                raise CLIError(
+                    f"command {args.command!r} requires src/harness/branch/, which is absent"
+                )
+            if args.command == "episodes":
+                return branch.episodes_cli.handle(args)
+            if args.command == "experiments":
+                return branch.experiments_cli.handle(args)
+            if args.command == "preferences":
+                return _preferences_command(args, branch)
+            load_dotenv(args.env_file, disabled=args.no_env_file)
+            return _interactive_command(args, branch)
         if args.command == "replay":
             print(json.dumps(replay_run(args.run_dir), ensure_ascii=False, indent=2))
             return 0
-        if args.command == "preferences":
-            return _preferences_command(args)
         if args.command == "vector-index":
             load_dotenv(args.env_file, disabled=args.no_env_file)
             return _vector_index_command(args)
-        if args.command in {"chat", "resume"}:
-            load_dotenv(args.env_file, disabled=args.no_env_file)
-            return _interactive_command(args)
         args.runtime_config = _load_contract(args.runtime_config, RuntimeConfig)
         if args.agent_mode is not None:
             args.runtime_config = args.runtime_config.model_copy(
@@ -388,12 +410,12 @@ def entrypoint() -> None:
     raise SystemExit(main())
 
 
-def _preferences_command(args):
+def _preferences_command(args, branch):
     if args.operation in {"set", "remove"} and not args.name:
         raise CLIError("--name is required for set/remove")
     if args.operation == "set" and args.value is None:
         raise CLIError("--value is required for set")
-    store = PreferenceStore(args.db)
+    store = branch.PreferenceStore(args.db)
     if args.operation == "set":
         store.set(
             args.profile_id,
@@ -414,7 +436,7 @@ def _preferences_command(args):
     return 0
 
 
-def _interactive_command(args):
+def _interactive_command(args, branch):
     if args.artifacts_dir.expanduser().exists():
         raise CLIError("refusing to overwrite existing audit directory")
     paused = None
@@ -458,7 +480,7 @@ def _interactive_command(args):
                 raise CLIError(
                     "--preferences-db requires --profile-id and cannot be combined with --user-profile"
                 )
-            user, _ = PreferenceStore(args.preferences_db).load(args.profile_id)
+            user, _ = branch.PreferenceStore(args.preferences_db).load(args.profile_id)
         else:
             if args.profile_id:
                 raise CLIError("--profile-id requires --preferences-db")
@@ -468,14 +490,11 @@ def _interactive_command(args):
         config = config.model_copy(update={"agent_mode": args.agent_mode})
     if args.source_key_env and not os.environ.get(args.source_key_env):
         raise CLIError("configured source credential environment variable is empty")
-    if args.source_url and args.vector_index:
-        raise CLIError("--vector-index is for local sources; configure vector search on the HTTP gateway")
-    if args.source_json and args.source_search_methods is not None:
-        raise CLIError("--source-search-methods applies only to an HTTP gateway")
+    # The public search contract exposes BM25 only: HttpProductSource validates a
+    # finite bm25_score on every returned item and has no vector transport.
     source = (
         JsonProductSource(
             args.source_json, source_id=args.source_id, currency=args.currency,
-            **_vector_options(args),
         )
         if args.source_json
         else HttpProductSource(
@@ -486,10 +505,9 @@ def _interactive_command(args):
                 os.environ.get(args.source_key_env) if args.source_key_env else None
             ),
             timeout=args.source_timeout,
-            search_methods=tuple(args.source_search_methods or ["bm25"]),
         )
     )
-    with InteractiveHarness(source, default_max_steps=max_steps) as harness:
+    with branch.InteractiveHarness(source, default_max_steps=max_steps) as harness:
         runner = AgentRunner(
             provider=_build_provider(args),
             harness=harness,
@@ -555,7 +573,6 @@ def _run_command(args: argparse.Namespace) -> int:
         products_path=args.products_path,
         index_path=args.index_path,
         default_max_steps=args.max_steps,
-        **_vector_options(args),
     ) as harness:
         result = AgentRunner(
             provider=provider,
@@ -591,7 +608,6 @@ def _rollout_command(
         products_path=args.products_path,
         index_path=args.index_path,
         default_max_steps=args.max_steps,
-        **_vector_options(args),
     ) as harness:
 
         def runner_factory() -> AgentRunner:
@@ -668,15 +684,6 @@ def _build_embedding_provider(args):
         model=model, base_url=base_url,
         api_key=os.environ.get(args.embedding_key_env), timeout=args.embedding_timeout,
     )
-
-
-def _vector_options(args):
-    if args.vector_index is None:
-        return {}
-    return {
-        "vector_index_path": args.vector_index,
-        "embedding_provider": _build_embedding_provider(args),
-    }
 
 
 def _vector_index_command(args):

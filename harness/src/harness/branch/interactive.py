@@ -6,10 +6,10 @@ import hashlib
 from threading import RLock
 from uuid import uuid4
 
-from .harness import ShoppingHarness, DuplicateSessionError, HarnessError
-from .schemas import PublicTask, SessionSnapshot
-from .session import ShoppingSession
-from .sources import ProductSource
+from ..harness import ShoppingHarness, DuplicateSessionError, HarnessError
+from ..schemas import PublicTask, SessionSnapshot
+from ..session import ShoppingSession
+from ..sources import ProductSource
 
 
 class _PublicTaskStore:

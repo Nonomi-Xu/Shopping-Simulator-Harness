@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
-from src.harness.test.test_episode_runner import EpisodeFixture
-from src.harness.episodes.runner import EpisodeRunner
-from src.harness.episodes.artifacts import write_episode_artifacts
+from src.harness.branch.test.test_episode_runner import EpisodeFixture
+from src.harness.branch.episodes.runner import EpisodeRunner
+from src.harness.branch.episodes.artifacts import write_episode_artifacts
 from examples.long_horizon_demo import DemoProvider
 
 
@@ -34,6 +34,6 @@ class EpisodeLeakageTest(EpisodeFixture):
         self.assertIn(original.target_asin, json.dumps(provider.requests, ensure_ascii=False))
 
     def test_simulator_has_no_product_or_task_store_capability(self):
-        from src.harness.episodes.simulator import DeterministicSimulator
+        from src.harness.branch.episodes.simulator import DeterministicSimulator
         simulator = DeterministicSimulator(self.episode.hidden_goal, self.episode.disclosure_policy, self.episode.initial_requirement_ids)
         self.assertEqual(set(vars(simulator)), {"goal", "policy", "state"})

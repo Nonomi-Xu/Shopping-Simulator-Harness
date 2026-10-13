@@ -36,7 +36,8 @@ BM25 的两份历史基准汇总保留在 `BM25/results/`，用于文档引用�
 
 ```bash
 (cd BM25 && python -m unittest discover -s tests -v)
-(cd harness && python -m unittest discover -s src/harness/test -p 'test_*.py' -v)
+(cd harness && python -m unittest discover -s src/harness/test -p 'test_*.py' -v)          # 主线
+(cd harness && python -m unittest discover -s src/harness/branch/test -p 'test_*.py' -v)  # 可选支线
 ```
 
 ## Original / Test1 与新评测

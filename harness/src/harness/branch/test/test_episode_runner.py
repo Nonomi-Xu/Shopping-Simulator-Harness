@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from src.data.search_bm25 import build_index, sha256_file
 from src.harness.tasks import TaskStore
-from src.harness.episodes.parser import RuleGoalParser
-from src.harness.episodes.preprocess import build_episode
-from src.harness.episodes.models import EpisodeConfig, Trajectory
-from src.harness.episodes.runner import EpisodeRunner
+from src.harness.branch.episodes.parser import RuleGoalParser
+from src.harness.branch.episodes.preprocess import build_episode
+from src.harness.branch.episodes.models import EpisodeConfig, Trajectory
+from src.harness.branch.episodes.runner import EpisodeRunner
 from src.harness.test.test_agent_runner import ScriptedProvider, tool_turn
 
 
@@ -40,7 +40,7 @@ class EpisodeRunnerTest(EpisodeFixture):
         result = runner.run_episode(self.episode)
         self.assertEqual(result.run.terminal_reason, "max_steps")
         self.assertEqual(result.run.tool_call_count, 1)
-        from src.harness.episodes.simulator import DeterministicSimulator
+        from src.harness.branch.episodes.simulator import DeterministicSimulator
         class BrokenSimulator(DeterministicSimulator):
             def answer(self, *args, **kwargs):
                 super().answer(*args, **kwargs)

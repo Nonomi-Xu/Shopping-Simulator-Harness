@@ -1,5 +1,5 @@
 """Batch query preprocessing. Evaluation never calls this pipeline implicitly."""
-from ..agent.events import digest
+from ...agent.events import digest
 from .models import ShoppingEpisode, DisclosurePolicy
 from .parser import validate_goal
 

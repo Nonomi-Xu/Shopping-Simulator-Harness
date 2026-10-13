@@ -78,8 +78,9 @@ source-id/currency/source 配置须与启动时一致；若使用了自定义 --
 
 ```python
 from pathlib import Path
-from src.harness.agent import AgentRunner, RuntimeConfig, UserReply, PreferenceStore
-from src.harness.interactive import InteractiveHarness
+from src.harness.agent import AgentRunner, RuntimeConfig, UserReply
+from src.harness.branch.interactive import InteractiveHarness
+from src.harness.branch.preferences import PreferenceStore
 from src.harness.sources import JsonProductSource
 
 # provider 使用调用方配置的 ModelProvider；可沿用 DeepSeekProvider。

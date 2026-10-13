@@ -2,7 +2,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from ..agent.events import digest
+from ...agent.events import digest
 from .models import ShoppingEpisode
 
 

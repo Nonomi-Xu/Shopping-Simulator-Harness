@@ -8,16 +8,16 @@ from unittest.mock import patch
 
 from examples.long_horizon_demo import DemoProvider
 from src.harness.cli import main
-from src.harness.episodes.runner import EpisodeRunner
-from src.harness.experiments.metrics import project_metrics
-from src.harness.experiments.models import ExperimentConfig, Variant
-from src.harness.experiments.report import build_report
-from src.harness.experiments.runner import Case, load_completed, run_experiment
-from src.harness.experiments.statistics import estimate, holm_adjust, paired_metric, summarize_metric
+from src.harness.branch.episodes.runner import EpisodeRunner
+from src.harness.branch.experiments.metrics import project_metrics
+from src.harness.branch.experiments.models import ExperimentConfig, Variant
+from src.harness.branch.experiments.report import build_report
+from src.harness.branch.experiments.runner import Case, load_completed, run_experiment
+from src.harness.branch.experiments.statistics import estimate, holm_adjust, paired_metric, summarize_metric
 from src.harness.providers import ProviderAPIError
 from src.harness.tasks import TaskStore
 from src.harness.test.test_agent_runner import ScriptedProvider
-from src.harness.test.test_episode_runner import EpisodeFixture
+from src.harness.branch.test.test_episode_runner import EpisodeFixture
 
 
 class StatisticsTest(unittest.TestCase):
@@ -110,7 +110,7 @@ class ExperimentTest(EpisodeFixture):
                 "--index-path", str(self.index), "--task-id", self.episode.task_id,
                 "--output-dir", str(output), "--no-env-file"]
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "synthetic-key"}), \
-             patch("src.harness.experiments.cli.DeepSeekProvider", side_effect=lambda **kw: DemoProvider()), \
+             patch("src.harness.branch.experiments.cli.DeepSeekProvider", side_effect=lambda **kw: DemoProvider()), \
              redirect_stdout(io.StringIO()):
             self.assertEqual(main(args), 0)
         manifest = json.loads((output / "private/manifest.json").read_text())

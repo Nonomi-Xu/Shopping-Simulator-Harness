@@ -1,9 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
-from src.harness.episodes.parser import RuleGoalParser, StructuredGoalParser, validate_goal
-from src.harness.episodes.preprocess import prepare_episodes
-from src.harness.episodes.store import EpisodeStore
+from src.harness.branch.episodes.parser import RuleGoalParser, StructuredGoalParser, validate_goal
+from src.harness.branch.episodes.preprocess import prepare_episodes
+from src.harness.branch.episodes.store import EpisodeStore
 from src.harness.schemas import PublicTask
 from src.harness.test.test_agent_runner import ScriptedProvider, tool_turn
 

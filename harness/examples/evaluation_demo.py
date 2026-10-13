@@ -7,11 +7,11 @@ from src.harness.paths import result_path
 from examples.long_horizon_demo import DemoProvider
 from src.data.search_bm25 import build_index, sha256_file
 from src.harness.agent import RuntimeConfig
-from src.harness.episodes.parser import RuleGoalParser
-from src.harness.episodes.preprocess import build_episode
-from src.harness.experiments.models import ExperimentConfig, Variant
-from src.harness.experiments.report import build_report
-from src.harness.experiments.runner import Case, load_completed, run_experiment
+from src.harness.branch.episodes.parser import RuleGoalParser
+from src.harness.branch.episodes.preprocess import build_episode
+from src.harness.branch.experiments.models import ExperimentConfig, Variant
+from src.harness.branch.experiments.report import build_report
+from src.harness.branch.experiments.runner import Case, load_completed, run_experiment
 from src.harness.tasks import TaskStore
 
 

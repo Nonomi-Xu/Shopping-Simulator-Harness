@@ -1,8 +1,8 @@
 """Write public trajectories and private evaluation sidecars to separate directories."""
 import json
 from pathlib import Path
-from ..agent.artifacts import write_run_artifacts, replay_run
-from ..agent.events import digest
+from ...agent.artifacts import write_run_artifacts, replay_run
+from ...agent.events import digest
 from .models import Trajectory
 
 

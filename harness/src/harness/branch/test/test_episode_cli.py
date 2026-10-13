@@ -3,7 +3,7 @@ import json
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
-from src.harness.test.test_episode_runner import EpisodeFixture
+from src.harness.branch.test.test_episode_runner import EpisodeFixture
 from src.harness.cli import main
 from examples.long_horizon_demo import DemoProvider
 
@@ -16,7 +16,7 @@ class EpisodeCLITest(EpisodeFixture):
             self.assertEqual(main(["episodes", "prepare", *common, "--parser", "rule", "--count", "0"]), 0)
         self.assertIn('"prepared": 2', output.getvalue())
         run = Path(self.tmp.name)/"cli-run"
-        with patch("src.harness.episodes.cli.DeepSeekProvider", side_effect=lambda **kw: DemoProvider()), redirect_stdout(io.StringIO()):
+        with patch("src.harness.branch.episodes.cli.DeepSeekProvider", side_effect=lambda **kw: DemoProvider()), redirect_stdout(io.StringIO()):
             self.assertEqual(main(["episodes", "run", *common, "--episode-id", self.episode.episode_id, "--output-dir", str(run)]), 0)
             self.assertEqual(main(["episodes", "replay", "--run-dir", str(run)]), 0)
         self.assertTrue((run/"public/trajectory.jsonl").is_file())
@@ -30,7 +30,7 @@ class EpisodeCLITest(EpisodeFixture):
             self.assertEqual(main(["episodes", "prepare", *common, "--parser", "rule", "--count", "0"]), 0)
         directories = []
         with patch("src.harness.paths.OUTPUTS_DIR", root), \
-             patch("src.harness.episodes.cli.DeepSeekProvider", side_effect=lambda **kw: DemoProvider()):
+             patch("src.harness.branch.episodes.cli.DeepSeekProvider", side_effect=lambda **kw: DemoProvider()):
             for _ in range(2):
                 with redirect_stdout(io.StringIO()) as output:
                     self.assertEqual(main(["episodes", "run", *common, "--episode-id", self.episode.episode_id]), 0)

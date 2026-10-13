@@ -230,8 +230,8 @@ all occurrences of a normally surfaced product ID.
 ## Validation
 
 ```bash
-python -m unittest discover -s src/harness/test -p 'test_*.py'
-python -m unittest src.harness.test.test_episode_leakage -v
+python -m unittest discover -s src/harness/branch/test -p 'test_*.py'
+python -m unittest src.harness.branch.test.test_episode_leakage -v
 ```
 
 Tests cover parsing/cache reuse, disclosure consistency, state updates, hard preservation,

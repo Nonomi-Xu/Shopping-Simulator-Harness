@@ -1,7 +1,7 @@
 import unittest
-from src.harness.episodes.parser import RuleGoalParser
-from src.harness.episodes.models import DisclosurePolicy
-from src.harness.episodes.simulator import DeterministicSimulator, ConstrainedLLMSimulator
+from src.harness.branch.episodes.parser import RuleGoalParser
+from src.harness.branch.episodes.models import DisclosurePolicy
+from src.harness.branch.episodes.simulator import DeterministicSimulator, ConstrainedLLMSimulator
 from src.harness.test.test_agent_runner import ScriptedProvider, tool_turn
 
 

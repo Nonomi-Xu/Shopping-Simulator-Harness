@@ -1,6 +1,6 @@
 """Project existing runtime events into typed public per-action trajectories."""
-from ..agent.contracts import TaskProfile, AgentAction, AgentObservation, WorkingMemory
-from ..schemas import RecommendationItem
+from ...agent.contracts import TaskProfile, AgentAction, AgentObservation, WorkingMemory
+from ...schemas import RecommendationItem
 from .models import PreferenceState, CandidateSnapshot, TrajectoryTurn, Trajectory
 
 

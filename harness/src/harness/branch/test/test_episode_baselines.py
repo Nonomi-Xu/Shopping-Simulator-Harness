@@ -1,7 +1,7 @@
 from pathlib import Path
-from src.harness.test.test_episode_runner import EpisodeFixture
-from src.harness.episodes.runner import EpisodeRunner
-from src.harness.episodes.baselines import run_comparison
+from src.harness.branch.test.test_episode_runner import EpisodeFixture
+from src.harness.branch.episodes.runner import EpisodeRunner
+from src.harness.branch.episodes.baselines import run_comparison
 from examples.long_horizon_demo import DemoProvider
 
 

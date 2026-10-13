@@ -11,6 +11,16 @@ Harness 0.5 将 Agent 定义为七个有版本的数据与执行模块。`AgentR
 ProductSource。交互任务不附带私有评测标签。协议、CLI 和恢复边界见
 [第三阶段说明](stage-three.md)。离线模式仍为九工具，交互模式增加 ask_user。
 
+## 源码布局：主线与可选支线
+
+`src/harness/` 只保留离线 Test1 主线的七个模块与评测层；第三阶段的交互能力、
+长程 Episode 与配对实验已归入 `src/harness/branch/`（`interactive.py`、
+`preferences.py`、`episodes/`、`experiments/`）。依赖方向单向：支线可依赖主线，
+主线不得依赖支线。唯一受控入口是 `cli.py` 的 `load_branch()`，它以
+`try/except ImportError` 加载支线，缺失时相应子命令不注册。删除整个
+`src/harness/branch/` 后主线仍完整可用，由 `test/test_branch_boundary.py`
+在独立解释器中验证。本文余下部分的运行时契约不受该布局影响。
+
 ```mermaid
 flowchart TD
     P[AgentProfile / UserProfile / TaskProfile] --> C[ContextBuilder]
@@ -196,6 +206,7 @@ shopping-agent run --task-id TASK_ID \
   --artifacts-dir outputs/example-runtime
 shopping-agent replay --run-dir outputs/example-runtime
 python -m unittest discover -s src/harness/test -p 'test_*.py' -v
+python -m unittest discover -s src/harness/branch/test -p 'test_*.py' -v   # 可选支线
 ```
 
 TASK_ID 替换为当前数据集真实的公开任务 ID。run 会调用已配置的 Provider；schema、

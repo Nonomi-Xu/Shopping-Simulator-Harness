@@ -10,11 +10,11 @@ from src.harness.agent import (
     AgentRunResult,
     RuntimeConfig,
     UserReply,
-    PreferenceStore,
     replay_run,
     write_run_artifacts,
 )
-from src.harness.interactive import InteractiveHarness
+from src.harness.branch.interactive import InteractiveHarness
+from src.harness.branch.preferences import PreferenceStore
 from src.harness.sources import JsonProductSource
 from src.harness.providers import AssistantTurn, ToolCall, TokenUsage, canonical_json
 

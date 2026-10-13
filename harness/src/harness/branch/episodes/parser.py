@@ -5,9 +5,9 @@ import hashlib
 import re
 from pathlib import Path
 from typing import Protocol
-from ..providers import ChatMessage, ModelProvider, ToolDefinition
-from ..agent.events import digest
-from ..constraints import Predicate, validate_predicate_quote
+from ...providers import ChatMessage, ModelProvider, ToolDefinition
+from ...agent.events import digest
+from ...constraints import Predicate, validate_predicate_quote
 from .models import GoalRequirement, UserGoal
 
 

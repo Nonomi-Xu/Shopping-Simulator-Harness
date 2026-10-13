@@ -14,19 +14,18 @@ from src.harness.agent import (
     RuntimeConfig,
     UserReply,
     UserProfile,
-    PreferenceStore,
-    PreferenceConflict,
     AgentRunResult,
     replay_run,
     write_run_artifacts,
 )
+from src.harness.branch.preferences import PreferenceStore, PreferenceConflict
 from src.harness.agent.orchestrator import validate_checkpoint
 from src.harness.agent.profile import validate_constraints
 from src.harness.agent.contracts import Constraint, TaskProfile, UserMessage
 from src.harness.agent.memory import MemoryStore
 from src.harness.agent.events import replay_events
 from src.harness.catalog import CatalogDataError
-from src.harness.interactive import InteractiveHarness
+from src.harness.branch.interactive import InteractiveHarness
 from src.harness.harness import HarnessError
 from src.harness.sources import JsonProductSource, HttpProductSource, _NoRedirect
 from src.harness.schemas import SearchProductsAction, PublicTask
