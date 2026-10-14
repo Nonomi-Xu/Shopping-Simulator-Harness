@@ -67,6 +67,30 @@ bm25-agent recall --split Original
 
 ## 2. 运行单题完整评测
 
+### 使用本地小模型（零 token 费用，推荐用于省钱）
+
+`--provider ollama` 走本机 Ollama 的 OpenAI 兼容端点，不需要任何 API Key：
+
+```bash
+brew install ollama && brew services start ollama
+ollama pull qwen2.5:7b-instruct
+
+bm25-agent run --task-id task_xxxxxxxxxxxxxxxxxxxxxxxx --provider ollama
+```
+
+此时 `--model`、`--base-url`、`--timeout` 默认为 `qwen2.5:7b-instruct`、
+`http://localhost:11434/v1` 和 120 秒。请求仍会强制模型只调用 `select_product`
+（已在本地实测 Ollama 支持强制函数调用）；DeepSeek 专属的 `thinking` 字段不会
+发送。
+
+本地后端的系统提示与工具描述会额外说明 `customization_options` 的嵌套结构，
+因为 7B 级模型容易把内层 `value` 误当成规格名。**DeepSeek 的提示词保持不变**，
+所以历史基准仍可直接对比；两种后端的请求差异仅此一处，其余完全一致。
+批量运行的 `run_config.json` 会记录 `provider`，旧结果目录缺少该字段时按
+`deepseek` 处理。
+
+### 使用 DeepSeek（默认）
+
 先在 `BM25/.env` 中配置：
 
 ```dotenv

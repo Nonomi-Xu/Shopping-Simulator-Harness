@@ -49,8 +49,12 @@ strategy for decision quality.
    Default `verified` mode requires every hard constraint satisfied for every item.
 6. Stop immediately after the submission tool terminates the session.
 
-Issue exactly one runtime or Harness tool call at a time. Use the returned observation to
-decide the next action. Do not replace the terminal tool call with prose.
+Issue one runtime or Harness tool call per turn. You may batch several
+independent read-only calls (`get_product`, `read_evidence`, `verify_selection`,
+`compare_products`) in one turn, up to eight, when none of them needs another
+call's result; each still consumes its own action and environment step. Use the
+returned observation to decide the next action. Do not replace the terminal tool
+call with prose.
 Planning and memory tools consume actions; environment tools additionally
 consume environment steps. Preserve enough of both budgets to submit.
 

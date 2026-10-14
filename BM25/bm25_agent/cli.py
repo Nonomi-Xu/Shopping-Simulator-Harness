@@ -15,7 +15,14 @@ from .pipeline import (
     evaluation_summary_payloads,
     retrieval_summary,
 )
-from .provider import DEFAULT_BASE_URL, DEFAULT_MODEL, DeepSeekSelector
+from .provider import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    DeepSeekSelector,
+    OllamaSelector,
+)
 from .tasks import TaskStore
 
 
@@ -80,12 +87,40 @@ def _seed(value: str) -> int | str:
 
 
 def _add_provider(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--provider",
+        choices=("deepseek", "ollama"),
+        default="deepseek",
+        help=(
+            "deepseek calls the paid remote API; ollama calls a local "
+            "OpenAI-compatible server at no per-token cost (default: deepseek)."
+        ),
+    )
+    parser.add_argument("--model", default=None, help="Defaults to the provider's model.")
+    parser.add_argument("--base-url", default=None, help="Defaults to the provider's endpoint.")
+    parser.add_argument("--timeout", type=float, default=None, help="Defaults to 60s (DeepSeek) or 120s (Ollama).")
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--env-file", type=Path)
+
+
+def _provider_defaults(provider: str) -> tuple[str, str, float]:
+    if provider == "ollama":
+        return OLLAMA_MODEL, OLLAMA_BASE_URL, 120.0
+    return DEFAULT_MODEL, DEFAULT_BASE_URL, 60.0
+
+
+def _build_selector(args: argparse.Namespace):
+    """Construct the selector for the requested backend."""
+    default_model, default_base_url, default_timeout = _provider_defaults(args.provider)
+    selector_class = OllamaSelector if args.provider == "ollama" else DeepSeekSelector
+    return selector_class(
+        model=args.model or default_model,
+        base_url=args.base_url or default_base_url,
+        timeout=default_timeout if args.timeout is None else args.timeout,
+        max_retries=args.max_retries,
+        temperature=args.temperature,
+    )
 
 
 def _selected_ids(args: argparse.Namespace, tasks: TaskStore) -> list[str]:
@@ -131,13 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
 
             load_dotenv(args.env_file)
-            selector = DeepSeekSelector(
-                model=args.model,
-                base_url=args.base_url,
-                timeout=args.timeout,
-                max_retries=args.max_retries,
-                temperature=args.temperature,
-            )
+            selector = _build_selector(args)
             pipeline = BM25AgentPipeline(tasks=tasks, catalog=catalog, selector=selector)
             if args.command == "run":
                 result = pipeline.run(args.task_id)
@@ -152,11 +181,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0 if result.status == "completed" else 1
 
             task_ids = _selected_ids(args, tasks)
+            default_model, default_base_url, _ = _provider_defaults(args.provider)
             configuration = {
                 "split": args.split,
                 "task_ids": task_ids,
-                "model": args.model,
-                "base_url": args.base_url,
+                "provider": args.provider,
+                "model": args.model or default_model,
+                "base_url": args.base_url or default_base_url,
                 "temperature": args.temperature,
                 "products_path": str(args.products_path.expanduser().resolve()),
                 "index_path": str(args.index_path.expanduser().resolve()),
@@ -173,6 +204,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 saved_configuration = json.loads(
                     (output_dir / "run_config.json").read_text(encoding="utf-8")
                 )
+                # Checkpoints written before local providers existed have no
+                # backend recorded and were produced by DeepSeek.
+                saved_configuration.setdefault("provider", "deepseek")
                 if saved_configuration != configuration:
                     raise ValueError("resume configuration does not match run_config.json")
 

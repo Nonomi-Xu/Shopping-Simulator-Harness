@@ -386,14 +386,199 @@ class StageTwoRuntimeTest(unittest.TestCase):
         self.assertEqual(observed_product(restored, asin)[1], sources)
         store = MemoryStore("stage-two")
         store.state = restored
-        with self.assertRaises(ValueError):
-            store.read_evidence(
-                ReadEvidence(
-                    asin=asin,
-                    observation_id="stage-two:action_0003:observation",
-                    field_paths=["/price_min"],
-                )
+        # price_min was never observed for this ASIN, so pinning a narrower
+        # observation still cannot produce it -- but the read reports the gap
+        # instead of failing the whole call.
+        response = store.read_evidence(
+            ReadEvidence(
+                asin=asin,
+                observation_id="stage-two:action_0003:observation",
+                field_paths=["/price_min"],
             )
+        )
+        self.assertEqual(response["items"], [])
+        self.assertEqual(
+            [m["field_path"] for m in response["missing_field_paths"]], ["/price_min"]
+        )
+        self.assertNotIn("/price_min", response["available_field_paths"])
+
+    def test_merged_read_serves_a_field_fetched_by_another_observation(self):
+        """The nested read must still yield a citable citation.
+
+        Test1 lost 90 reads to "evidence field path does not exist" because a
+        read served only the pinned observation. Merging the ASIN's observations
+        fixes that, but each fragment must then report the observation that
+        actually returned its field, or ``record_evidence`` would reject the
+        citation. This test drives both halves: the merged read, and recording
+        evidence from the source ids it returns.
+        """
+        asin = f.TARGET_ASIN
+        attrs_observation = "stage-two:action_0003:observation"
+        options_observation = "stage-two:action_0004:observation"
+
+        def cite_the_fragments(messages):
+            data = json.loads(messages[-1].content)["data"]
+            items = {item["field_path"]: item for item in data["items"]}
+            attribute = items["/attributes/0"]
+            option = next(
+                item
+                for path, item in items.items()
+                if path.startswith("/customization_options/颜色/")
+                and path.endswith("/value")
+            )
+            return f.tool_turn(
+                "evidence",
+                "record_evidence_batch",
+                {
+                    "assessments": [
+                        {
+                            "asin": asin,
+                            "constraint_id": "quiet",
+                            "status": "satisfied",
+                            "observation_id": attribute["source_observation_id"],
+                            "field_path": attribute["field_path"],
+                            "quote": attribute["value"],
+                            "explanation": "公开属性包含静音",
+                        },
+                        {
+                            "asin": asin,
+                            "constraint_id": "color",
+                            "status": "satisfied",
+                            "observation_id": option["source_observation_id"],
+                            "field_path": option["field_path"],
+                            "quote": option["value"],
+                            "explanation": "公开规格可选白色",
+                        },
+                    ]
+                },
+            )
+
+        result, _ = self.run_script(
+            [
+                f.tool_turn(
+                    "plan",
+                    "update_plan",
+                    {
+                        "constraints": [
+                            {
+                                "constraint_id": "quiet",
+                                "description": "需要静音",
+                                "priority": "hard",
+                                "source": "user_query",
+                                "source_quote": "静音",
+                            },
+                            {
+                                "constraint_id": "color",
+                                "description": "需要白色",
+                                "priority": "hard",
+                                "source": "user_query",
+                                "source_quote": "白色",
+                            },
+                        ],
+                        "queries": ["白色静音冰箱"],
+                        "change_summary": "提取静音与白色要求",
+                    },
+                ),
+                f.tool_turn("search", "search_products", {"query": "冰箱"}),
+                f.tool_turn(
+                    "attributes-only",
+                    "get_product",
+                    {"asin": asin, "fields": ["attributes"]},
+                ),
+                f.tool_turn(
+                    "options-only",
+                    "get_product",
+                    {
+                        "asin": asin,
+                        "fields": [
+                            "customization_options",
+                            "variant_combinations",
+                            "title",
+                        ],
+                    },
+                ),
+                # Pins the attributes-only observation, yet asks for an option path
+                # that only the later observation returned. This is the exact shape
+                # that used to be rejected 90 times.
+                f.tool_turn(
+                    "read",
+                    "read_evidence",
+                    {
+                        "asin": asin,
+                        "observation_id": attrs_observation,
+                        "field_paths": ["/attributes", "/customization_options"],
+                    },
+                ),
+                cite_the_fragments,
+                f.tool_turn(
+                    "submit",
+                    "submit_recommendations",
+                    {
+                        "recommendations": [
+                            {
+                                "asin": asin,
+                                "selected_options": {"颜色": "白色"},
+                                "reason": "详情确认白色可选且具备静音属性",
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+
+        observations = [e.payload for e in result.events if e.kind == "observation"]
+        read = observations[4]["data"]
+        self.assertEqual(read["missing_field_paths"], [])
+        self.assertEqual(
+            read["available_field_paths"],
+            [
+                "/asin",
+                "/attributes",
+                "/category",
+                "/customization_options",
+                "/title",
+                "/variant_combinations",
+            ],
+        )
+        # The two fragments come from two different observations, and the merge
+        # reports which one owns which field.
+        self.assertEqual(read["field_sources"]["attributes"], attrs_observation)
+        self.assertEqual(
+            read["field_sources"]["customization_options"], options_observation
+        )
+        sources = {item["field_path"]: item["source_observation_id"] for item in read["items"]}
+        self.assertEqual(sources["/attributes/0"], attrs_observation)
+        self.assertEqual(
+            sources["/customization_options/颜色/0/value"], options_observation
+        )
+        # The citations the model derived from those ids were accepted.
+        self.assertEqual(observations[5]["status"], "success")
+        self.assertEqual(len(observations[5]["data"]["assessments"]), 2)
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(result.session.evaluation.strict_success)
+
+    def test_read_offset_past_the_end_is_an_empty_page_not_an_error(self):
+        asin = f.TARGET_ASIN
+        result, _ = self.run_script(
+            [
+                f.requirement_turn("白色"),
+                f.tool_turn("search", "search_products", {"query": "冰箱"}),
+                f.tool_turn("detail", "get_product", {"asin": asin}),
+                f.tool_turn(
+                    "read-past-end",
+                    "read_evidence",
+                    {"asin": asin, "field_paths": ["/attributes"], "offset": 500},
+                ),
+            ]
+        )
+
+        observations = [e.payload for e in result.events if e.kind == "observation"]
+        read = observations[3]
+        self.assertEqual(read["status"], "success")
+        self.assertEqual(read["data"]["items"], [])
+        self.assertTrue(read["data"]["offset_out_of_range"])
+        self.assertIsNone(read["data"]["next_offset"])
+        self.assertGreater(read["data"]["total_fragments"], 0)
 
     def test_comparison_and_verification_cannot_read_uninspected_or_foreign_products(
         self,

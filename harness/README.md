@@ -149,6 +149,8 @@ flowchart LR
 | Agent 定义与策略 | 约束检索、候选比较、规格选择和终局提交 | `skills/shopping-agent/SKILL.md` |
 | 模型 Provider | 统一消息、工具调用、终止原因和 Token Usage | `ModelProvider` |
 | DeepSeek Provider | DeepSeek Chat Completions 请求、解析与有界重试 | `DeepSeekProvider` |
+| Ollama Provider | 本地 OpenAI 兼容后端的同一套请求/解析，无需 API Key、零 token 费用 | `OllamaProvider` |
+| Provider Factory | 按名称解析后端默认模型、端点与超时 | `build_provider` |
 | Profile / Planning | 区分身份、背景偏好与任务，维护查询和约束来源 | `AgentProfile / UserProfile / Planner` |
 | Memory | 记录候选、查询、观察引用和逐项判断，生成有界视图 | `MemoryStore` |
 | Tools / Action / Observation | 基础九工具，按交互/多角色模式增加工具；动作、观察和可用状态 | `ToolRegistry / ActionProposal / AgentAction / AgentObservation` |
@@ -169,7 +171,7 @@ src/harness/                    离线 Test1 主线
   harness.py env.py paths.py sources.py cli.py
   agent/                        Runtime v5（含 multiagent.py）
   benchmark/                    Test1 冻结数据集、并发评测、配对报告
-  providers/                    Provider 协议与 DeepSeek 实现
+  providers/                    Provider 协议、共享传输与 DeepSeek / Ollama 实现
   api/                          旧接口兼容层
   test/                         主线测试
 
@@ -486,6 +488,53 @@ print(result.model_dump_json(indent=2))
 都会返回带完整消息、
 Token Usage 与 Session 快照的 `AgentRunResult`。
 
+## 使用本地小模型（Ollama，零 token 费用）
+
+本地后端与 DeepSeek 共用同一套 Chat Completions 实现
+（`providers/openai_compat.py`），只替换身份、凭据策略和后端专属参数。
+`--provider ollama` 不会发起任何计费请求，也**不需要 API Key**。
+
+### 一次性准备
+
+```bash
+brew install ollama
+brew services start ollama          # 或前台运行：ollama serve
+ollama pull qwen2.5:7b-instruct     # 约 4.7 GB
+```
+
+`qwen2.5:7b-instruct` 是 16 GB 统一内存上的推荐默认值：它支持 function calling，
+量化后约 4.7 GB。显存更紧张时可换 `qwen2.5:3b-instruct`，质量优先可换
+`qwen3:8b`（注意 Qwen3 默认开启 thinking，需要在其 Modelfile 中关闭）。
+
+### 运行
+
+```bash
+shopping-agent run \
+  --provider ollama \
+  --task-id task_0123456789abcdef01234567 \
+  --max-steps 20
+```
+
+`--provider ollama` 时 `--model`、`--base-url`、`--timeout` 的默认值分别为
+`qwen2.5:7b-instruct`、`http://localhost:11434/v1` 和 120 秒；显式传参始终优先。
+DeepSeek 仍是默认 provider，加 `--provider deepseek`（或不加）即可回到原路径，
+两条路径的产物格式、Token Usage 记录和审计轨迹完全一致。
+
+Python API 直接使用 `OllamaProvider`：
+
+```python
+from src.harness.providers import OllamaProvider, build_provider, list_local_models
+
+print(list_local_models())          # 服务器不可达时给出可执行的报错
+provider = OllamaProvider(model="qwen2.5:7b-instruct")
+# 或按名字构造，自动套用该后端的默认值：
+provider = build_provider("ollama", model="qwen3:4b")
+```
+
+本地后端的两点差异：Ollama 没有 `thinking` 参数，该字段会被静默丢弃；
+它可能不返回 `id` 或完整的 usage 计数，缺失的计数按 0 记录，而 DeepSeek
+仍然把缺失计数视为契约错误。
+
 ## 命令行与批量 Rollout
 
 安装项目并在进程环境或 `.env` 中设置 `DEEPSEEK_API_KEY` / `DEEPSEEK_API` 后，
@@ -735,7 +784,10 @@ src/harness/
   constraints.py                  类型化需求谓词
   cli.py                          任务、交互、Episode、实验和回放命令入口
   providers/base.py               Provider 协议、消息、工具调用和 Usage Schema
+  providers/openai_compat.py      共享的 Chat Completions 传输、重试与归一化
   providers/deepseek.py           DeepSeek Chat Completions Provider
+  providers/ollama.py             本地 Ollama Provider（免密钥）
+  providers/factory.py            按名称构造后端的统一入口
   api/                            旧 DeepSeek 客户端导入兼容层
   test/                           契约测试与数据诊断工具
 skills/

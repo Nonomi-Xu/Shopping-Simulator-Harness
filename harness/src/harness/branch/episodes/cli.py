@@ -7,7 +7,13 @@ from ...agent.contracts import RuntimeConfig
 from ...agent.events import digest
 from ...paths import HARNESS_DIR, result_path, default_run_path
 from ...env import load_dotenv
-from ...providers import DeepSeekProvider, DEFAULT_MODEL, DEFAULT_BASE_URL
+from ...providers import (
+    DEFAULT_BASE_URLS,
+    DEFAULT_MODELS,
+    PROVIDER_NAMES,
+    DeepSeekProvider,
+    OllamaProvider,
+)
 from ...tasks import TaskStore
 from .models import EpisodeConfig, DisclosurePolicy
 from .parser import RuleGoalParser, StructuredGoalParser
@@ -29,8 +35,9 @@ def register(parent):
         p.add_argument("--count", type=int, default=10, help="maximum selected records; 0 explicitly selects all")
         p.add_argument("--seed", type=int, default=42)
         p.add_argument("--episode-id", action="append")
-        p.add_argument("--model", default=DEFAULT_MODEL)
-        p.add_argument("--base-url", default=DEFAULT_BASE_URL)
+        p.add_argument("--provider", choices=PROVIDER_NAMES, default="deepseek")
+        p.add_argument("--model", default=None, help="Defaults to the selected provider's model.")
+        p.add_argument("--base-url", default=None, help="Defaults to the selected provider's endpoint.")
         p.add_argument("--provider-parameters", default='{"temperature":0}')
         p.add_argument("--env-file", type=Path)
         p.add_argument("--no-env-file", action="store_true")
@@ -56,9 +63,13 @@ def handle(args):
     if args.count < 0: raise ValueError("count must be nonnegative")
     parameters = json.loads(args.provider_parameters)
     if not isinstance(parameters, dict): raise ValueError("provider parameters must be an object")
+    model = args.model or DEFAULT_MODELS[args.provider]
+    base_url = args.base_url or DEFAULT_BASE_URLS[args.provider]
     def provider():
         load_dotenv(args.env_file, disabled=args.no_env_file)
-        return DeepSeekProvider(model=args.model, base_url=args.base_url, default_parameters=parameters)
+        # Module-level names keep test patching of this factory working.
+        provider_class = OllamaProvider if args.provider == "ollama" else DeepSeekProvider
+        return provider_class(model=model, base_url=base_url, default_parameters=parameters)
     if args.episode_command == "prepare":
         tasks = TaskStore(args.products_path)
         ids = tasks.list_task_ids(args.split)

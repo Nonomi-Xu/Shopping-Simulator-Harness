@@ -5,13 +5,17 @@ from pydantic import Field, model_validator
 
 from ...agent.contracts import Contract, RuntimeConfig
 from ..episodes.models import EpisodeConfig
-from ...providers import DEFAULT_BASE_URL
+from ...providers import DEFAULT_BASE_URLS, PROVIDER_NAMES
 
 
 class Variant(Contract):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     model: str = Field(min_length=1)
-    base_url: str = DEFAULT_BASE_URL
+    #: Backend that serves this variant; 'ollama' runs locally at no token cost.
+    provider: Literal["deepseek", "ollama"] = "deepseek"
+    #: Resolved from the provider when omitted, so an Ollama variant does not
+    #: silently inherit the DeepSeek endpoint.
+    base_url: str | None = None
     api_key_env: str = "DEEPSEEK_API_KEY"
     provider_parameters: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0})
     # Opt-in: most providers do not promise seeded sampling.
@@ -25,6 +29,20 @@ class Variant(Contract):
         if self.model_seed_parameter:
             params[self.model_seed_parameter] = repeat_seed
         return params
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_provider_defaults(cls, data):
+        """Default the endpoint to the selected provider's own base URL."""
+        if isinstance(data, dict) and not data.get("base_url"):
+            provider = data.get("provider") or "deepseek"
+            if provider not in PROVIDER_NAMES:
+                raise ValueError(
+                    f"unknown provider {provider!r}; expected one of "
+                    f"{', '.join(PROVIDER_NAMES)}"
+                )
+            data = {**data, "base_url": DEFAULT_BASE_URLS[provider]}
+        return data
 
     @model_validator(mode="after")
     def offline_state(self):

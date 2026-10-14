@@ -23,20 +23,24 @@ from ..agent.audit import RunAudit, write_json
 from ..agent.events import digest
 from ..agent.skill import load_agent_skill
 from ..env import load_dotenv
-from ..providers import DeepSeekProvider
+from ..providers import (
+    DEFAULT_BASE_URLS,
+    DEFAULT_MODELS,
+    PROVIDER_NAMES,
+    DeepSeekProvider,
+    OllamaProvider,
+)
 from .datasets import load, sha256_file
 
 sys.path.insert(0, str(PROJECT_DIR / 'BM25'))
 from bm25_agent.tasks import TaskStore as BM25Tasks
 from bm25_agent.catalog import BM25Catalog
 from bm25_agent.pipeline import BM25AgentPipeline
-from bm25_agent.provider import DeepSeekSelector
+from bm25_agent.provider import DeepSeekSelector, OllamaSelector
 
 
-class AuditedSelector(DeepSeekSelector):
-    def __init__(self, audit, **kwargs):
-        super().__init__(**kwargs)
-        self.audit = audit
+class _AuditedTransport:
+    """Mixin recording every provider transport exchange for the audit trail."""
 
     def _request(self, payload):
         self.audit.transport('request', {'body': payload})
@@ -47,6 +51,22 @@ class AuditedSelector(DeepSeekSelector):
             raise
         self.audit.transport('response', {'body': result})
         return result
+
+
+class AuditedSelector(_AuditedTransport, DeepSeekSelector):
+    """DeepSeek selector that journals each request and response."""
+
+    def __init__(self, audit, **kwargs):
+        super().__init__(**kwargs)
+        self.audit = audit
+
+
+class AuditedOllamaSelector(_AuditedTransport, OllamaSelector):
+    """Local Ollama selector that journals each request and response."""
+
+    def __init__(self, audit, **kwargs):
+        super().__init__(**kwargs)
+        self.audit = audit
 
 
 def score_harness(result, target):
@@ -131,7 +151,8 @@ def run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, w
         facts = tasks.get_private_facts(tid)
         try:
             if method == 'bm25':
-                selector = AuditedSelector(audit, model=config['model'], base_url=config['base_url'],
+                selector_class = AuditedOllamaSelector if config['provider'] == 'ollama' else AuditedSelector
+                selector = selector_class(audit, model=config['model'], base_url=config['base_url'],
                     timeout=config['timeout'], max_retries=config['max_retries'], temperature=0)
                 result = BM25AgentPipeline(tasks=bm25_tasks, catalog=catalog, selector=selector).run(tid)
                 write_json(audit.directory/'result.json', result.to_dict())
@@ -149,9 +170,14 @@ def run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, w
                     'usage': asdict(selection.usage) if selection and selection.usage else None,
                     'usage_complete': bool(selection and selection.usage), 'evaluation': asdict(e) if e else None}
             else:
-                provider = DeepSeekProvider(model=config['model'], base_url=config['base_url'],
+                # 'thinking' is a DeepSeek-only parameter; a local backend rejects it.
+                harness_parameters = {'temperature': 0}
+                if config['provider'] == 'deepseek':
+                    harness_parameters['thinking'] = {'type': config['harness_thinking']}
+                provider_class = OllamaProvider if config['provider'] == 'ollama' else DeepSeekProvider
+                provider = provider_class(model=config['model'], base_url=config['base_url'],
                     timeout=config['timeout'], max_retries=config['max_retries'],
-                    default_parameters={'temperature': 0, 'thinking': {'type': config['harness_thinking']}},
+                    default_parameters=harness_parameters,
                     request_observer=audit.transport)
                 original_complete = provider.complete
                 def guarded_complete(*args, **kwargs):
@@ -232,8 +258,10 @@ def main():
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--method', choices=['both', 'bm25', 'harness'], default='both')
     parser.add_argument('--run-dir', type=Path)
-    parser.add_argument('--model', default='deepseek-v4-flash')
-    parser.add_argument('--base-url', default='https://api.deepseek.com/v1')
+    parser.add_argument('--provider', choices=PROVIDER_NAMES, default='deepseek',
+                        help='Model backend for both methods; ollama runs locally at no token cost')
+    parser.add_argument('--model', default=None, help="Defaults to the selected provider's model")
+    parser.add_argument('--base-url', default=None, help="Defaults to the selected provider's endpoint")
     parser.add_argument('--harness-thinking', choices=['enabled', 'disabled'], default='enabled')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--max-retries', type=int, default=2)
@@ -252,10 +280,19 @@ def main():
     if tasks.list_task_ids('Original') != bm25_tasks.list_task_ids('Original'):
         raise ValueError('method task IDs/order differ')
     runtime = RuntimeConfig().model_dump(mode='json')
+    # The benchmark has always addressed the explicit /v1 endpoint; keep that
+    # for DeepSeek so historical comparisons and resume checks stay meaningful.
+    benchmark_defaults = {
+        'deepseek': ('deepseek-v4-flash', 'https://api.deepseek.com/v1'),
+        'ollama': (DEFAULT_MODELS['ollama'], DEFAULT_BASE_URLS['ollama']),
+    }
+    default_model, default_base_url = benchmark_defaults[args.provider]
+    model = args.model or default_model
+    base_url = args.base_url or default_base_url
     config = {'version': 'shopping-paired-benchmark-v1', 'transport_version': 'same-origin-redirect-v1', 'dataset': args.dataset,
         'dataset_sha256': digest(frozen), 'source_sha256': tasks.product_data_sha256,
         'index_sha256': sha256_file(index), 'task_ids': ids, 'smoke_limit': args.limit,
-        'model': args.model, 'base_url': args.base_url, 'temperature': 0,
+        'provider': args.provider, 'model': model, 'base_url': base_url, 'temperature': 0,
         'bm25_thinking': 'disabled', 'harness_thinking': args.harness_thinking, 'timeout': args.timeout, 'max_retries': args.max_retries,
         'runtime': runtime, 'max_steps': 20, 'max_model_turns': 40,
         'harness_tool_choice': 'auto', 'bm25_tool_choice': 'select_product',

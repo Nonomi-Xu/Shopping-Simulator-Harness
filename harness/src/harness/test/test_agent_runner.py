@@ -12,6 +12,7 @@ from typing import Any
 from src.data.search_bm25 import build_index, sha256_file
 from src.harness.agent import (
     AgentRunner,
+    RuntimeConfig,
     load_agent_skill,
     shopping_tool_definitions,
 )
@@ -115,6 +116,13 @@ class ScriptedProvider:
         if callable(output):
             return output(messages)
         return output
+
+
+def _observations(result) -> list[dict[str, Any]]:
+    """Return the observation payloads recorded during one run."""
+    return [
+        event.payload for event in result.events if event.kind == "observation"
+    ]
 
 
 def tool_turn(
@@ -311,7 +319,7 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(result.tool_call_count, 0)
         self.assertEqual(result.session.state.status, "active")
 
-    def test_parallel_tool_calls_fail_without_partial_dispatch(self) -> None:
+    def test_unbatchable_multi_call_executes_only_the_first(self) -> None:
         first = tool_turn(
             "call-one",
             "search_products",
@@ -329,7 +337,13 @@ class AgentRunnerTest(unittest.TestCase):
                     model="scripted-model",
                     tool_calls=[first, second],
                     finish_reason="tool_calls",
-                )
+                ),
+                AssistantTurn(
+                    provider="scripted",
+                    model="scripted-model",
+                    content="stopping",
+                    finish_reason="stop",
+                ),
             ]
         )
 
@@ -338,9 +352,133 @@ class AgentRunnerTest(unittest.TestCase):
             harness=self.harness,
         ).run(self.task_id)
 
-        self.assertEqual(result.terminal_reason, "multiple_tool_calls")
-        self.assertEqual(result.tool_call_count, 0)
-        self.assertEqual(result.session.history, [])
+        # A turn the runtime cannot honour no longer ends the run and no longer
+        # discards the work: the first call is dispatched and the rest are
+        # answered with a corrective rejection.
+        self.assertEqual(result.terminal_reason, "model_stopped_without_submission")
+        self.assertEqual(result.tool_call_count, 1)
+        rejected = [o for o in _observations(result) if o.get("error_code") == "batch_not_supported"]
+        self.assertEqual(len(rejected), 1)
+        # Every tool call of the turn is answered, so the transcript stays valid.
+        self.assertEqual(
+            [m.tool_call_id for m in result.messages if m.role == "tool"],
+            ["call-one", "call-two"],
+        )
+
+    def test_read_only_batch_executes_every_call_in_order(self) -> None:
+        provider = ScriptedProvider(
+            [
+                requirement_turn("白色"),
+                tool_turn(
+                    "call-search",
+                    "search_products",
+                    {"query": "白色静音冰箱", "limit": 2},
+                ),
+                AssistantTurn(
+                    provider="scripted",
+                    model="scripted-model",
+                    tool_calls=[
+                        tool_turn("call-alt", "get_product", {"asin": ALTERNATIVE_ASIN}).tool_calls[0],
+                        tool_turn("call-target", "get_product", {"asin": TARGET_ASIN}).tool_calls[0],
+                    ],
+                    finish_reason="tool_calls",
+                ),
+                color_evidence_turn(TARGET_ASIN, "白色"),
+                tool_turn(
+                    "call-submit",
+                    "submit_recommendations",
+                    {
+                        "recommendations": [
+                            {
+                                "asin": TARGET_ASIN,
+                                "selected_options": {"颜色": "白色"},
+                                "reason": "商品详情确认白色规格可用",
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+
+        result = AgentRunner(provider=provider, harness=self.harness).run(self.task_id)
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.terminal_reason, "submitted")
+        self.assertTrue(result.session.evaluation.strict_success)
+        # search + both batched details + submit
+        self.assertEqual(result.tool_call_count, 4)
+        # The batched turn is one assistant message followed by both results.
+        self.assertEqual(
+            [message.role for message in result.messages],
+            [
+                "system", "user",
+                "assistant", "tool",
+                "assistant", "tool",
+                "assistant", "tool", "tool",
+                "assistant", "tool",
+                "assistant", "tool",
+            ],
+        )
+        self.assertEqual(
+            [m.tool_call_id for m in result.messages if m.role == "tool"][2:4],
+            ["call-alt", "call-target"],
+        )
+        # Results follow the order the model sent the calls in.
+        details = [
+            event.payload
+            for event in result.events
+            if event.kind == "observation"
+            and event.payload["tool_name"] == "get_product"
+        ]
+        self.assertEqual(
+            [item["data"]["asin"] for item in details],
+            [ALTERNATIVE_ASIN, TARGET_ASIN],
+        )
+
+    def test_batch_beyond_the_configured_bound_is_rejected(self) -> None:
+        calls = [
+            tool_turn(f"call-{index}", "get_product", {"asin": TARGET_ASIN}).tool_calls[0]
+            for index in range(3)
+        ]
+        provider = ScriptedProvider(
+            [
+                requirement_turn("白色"),
+                tool_turn(
+                    "call-search",
+                    "search_products",
+                    {"query": "白色静音冰箱", "limit": 2},
+                ),
+                AssistantTurn(
+                    provider="scripted",
+                    model="scripted-model",
+                    tool_calls=calls,
+                    finish_reason="tool_calls",
+                ),
+                AssistantTurn(
+                    provider="scripted",
+                    model="scripted-model",
+                    content="stopping",
+                    finish_reason="stop",
+                ),
+            ]
+        )
+
+        result = AgentRunner(
+            provider=provider,
+            harness=self.harness,
+            config=RuntimeConfig(max_batch_calls=2),
+        ).run(self.task_id)
+
+        # Two calls ran (both details), the third was refused, and the run continued.
+        self.assertEqual(result.tool_call_count, 3)
+        rejected = [
+            o for o in _observations(result) if o.get("error_code") == "batch_limit_exceeded"
+        ]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(
+            [m.tool_call_id for m in result.messages if m.role == "tool"][-3:],
+            ["call-0", "call-1", "call-2"],
+        )
 
     def test_provider_failure_is_returned_as_an_audit_result(self) -> None:
         provider = ScriptedProvider(

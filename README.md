@@ -40,6 +40,24 @@ BM25 的两份历史基准汇总保留在 `BM25/results/`，用于文档引用�
 (cd harness && python -m unittest discover -s src/harness/branch/test -p 'test_*.py' -v)  # 可选支线
 ```
 
+## 模型后端：DeepSeek 或本地小模型
+
+两个项目都支持把付费的 DeepSeek 换成在本机运行的小模型，**默认行为不变**
+（不传 `--provider` 时仍是 DeepSeek）。本地路径不产生 token 费用，也不需要 API Key：
+
+```bash
+brew install ollama && brew services start ollama
+ollama pull qwen2.5:7b-instruct
+
+(cd harness && shopping-agent run --provider ollama --task-id task_xxx)
+(cd BM25   && bm25-agent   run --provider ollama --task-id task_xxx)
+```
+
+`--provider ollama` 的默认模型为 `qwen2.5:7b-instruct`，端点为
+`http://localhost:11434/v1`。DeepSeek 与 Ollama 共用同一套 Chat Completions
+实现，产物格式与 Token 记录保持一致，便于对比两种后端的评测结果。
+详见 [Harness 文档](harness/README.md) 与 [BM25 文档](BM25/README.md)。
+
 ## Original / Test1 与新评测
 
 Original 为全部 23,421 题；Test1 冻结为原始任务顺序第 1–500 题。

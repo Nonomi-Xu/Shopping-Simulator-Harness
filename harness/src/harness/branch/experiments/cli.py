@@ -8,7 +8,11 @@ from ...agent.events import digest
 from ...paths import HARNESS_DIR, result_path, default_run_path
 from ...env import load_dotenv
 from ..episodes.store import EpisodeStore
-from ...providers import DeepSeekProvider
+from ...providers import (
+    REQUIRES_API_KEY,
+    DeepSeekProvider,
+    OllamaProvider,
+)
 from ...tasks import TaskStore
 from .models import ExperimentConfig
 from .report import build_report, write_report
@@ -95,12 +99,23 @@ def handle(args):
         cases = select_cases(args, config)
         load_dotenv(args.env_file, disabled=args.no_env_file)
         for variant in config.variants:
-            if not os.environ.get(variant.api_key_env):
+            if REQUIRES_API_KEY[variant.provider] and not os.environ.get(variant.api_key_env):
                 raise ValueError(f"missing credential environment variable: {variant.api_key_env}")
 
         def factory(variant, seed):
-            return DeepSeekProvider(model=variant.model, base_url=variant.base_url,
-                api_key=os.environ[variant.api_key_env], default_parameters=variant.parameters(seed))
+            # Module-level names keep test patching of this factory working.
+            provider_class = (
+                OllamaProvider if variant.provider == "ollama" else DeepSeekProvider
+            )
+            kwargs = {
+                "model": variant.model,
+                "base_url": variant.base_url,
+                "default_parameters": variant.parameters(seed),
+            }
+            api_key = os.environ.get(variant.api_key_env)
+            if api_key:
+                kwargs["api_key"] = api_key
+            return provider_class(**kwargs)
 
         def progress(done, total, row):
             print(f"[{done}/{total}] {row['variant']} {row['task_id']} "

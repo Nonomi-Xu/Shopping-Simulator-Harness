@@ -1,4 +1,10 @@
-"""A one-call, tool-constrained DeepSeek selector for five frozen candidates."""
+"""One-call, tool-constrained selectors for five frozen BM25 candidates.
+
+Both the paid DeepSeek API and a local Ollama runtime speak the OpenAI Chat
+Completions protocol, so the request/parse logic lives in
+:class:`ChatCompletionsSelector` and the subclasses only change identity,
+credentials, and backend-specific payload fields.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +29,10 @@ from .types import AgentDecision, Candidate, SelectorResult, TokenUsage
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-v4-flash"
 
+# Local runtime defaults; Ollama serves an OpenAI-compatible API on localhost.
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+OLLAMA_MODEL = "qwen2.5:7b-instruct"
+
 
 class SelectorError(RuntimeError):
     pass
@@ -33,31 +43,56 @@ class CandidateSelector(Protocol):
     def select(self, query: str, candidates: Sequence[Candidate]) -> SelectorResult: ...
 
 
-class DeepSeekSelector:
+class ChatCompletionsSelector:
     """Give the model no tools except one terminal Top-5 selection call."""
+
+    #: Reported in :class:`SelectorResult` and used in error messages.
+    provider_name = "deepseek"
+    label = "DeepSeek"
+    #: Local servers do not authenticate.
+    require_api_key = True
+    #: Environment variables consulted for the credential, in order.
+    api_key_env_names: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DEEPSEEK_API")
+    #: Backend-specific request fields sent alongside the tool call.
+    extra_payload: Mapping[str, Any] = {"thinking": {"type": "disabled"}}
+    #: Whether the backend honours a forced ``tool_choice``.
+    supports_forced_tool_choice = True
+
+    #: Frozen prompt text. Subclasses may extend it for weaker local models,
+    #: but the DeepSeek wording stays byte-identical so historical runs remain
+    #: comparable.
+    tool_description = (
+        "Select exactly one product from the supplied BM25 Top-5 and "
+        "choose only available option values shown for that product."
+    )
+    system_prompt = (
+        "你是购物推荐决策 Agent。BM25 检索已经结束。你只能比较用户消息中"
+        "给出的候选，必须选择恰好一个候选 ASIN，并仅从该商品明确列出的可用"
+        "规格值中选择。不得搜索、虚构商品或规格。仔细匹配用途、属性、品牌、"
+        "型号、预算和规格；BM25 排名只是参考。最后只调用 select_product。"
+    )
 
     def __init__(
         self,
         *,
         api_key: str | None = None,
-        model: str = DEFAULT_MODEL,
-        base_url: str = DEFAULT_BASE_URL,
+        model: str,
+        base_url: str,
         timeout: float = 60.0,
         max_retries: int = 2,
         temperature: float = 0.0,
         opener: Callable[..., Any] | None = None,
         sleeper: Callable[[float], None] | None = None,
     ) -> None:
-        resolved_key = api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get(
-            "DEEPSEEK_API"
-        )
-        if not resolved_key or not resolved_key.strip():
-            raise SelectorError("set DEEPSEEK_API_KEY before running Agent evaluation")
+        resolved_key = api_key or self._api_key_from_environment()
+        if self.require_api_key and (not resolved_key or not resolved_key.strip()):
+            names = " or ".join(self.api_key_env_names)
+            raise SelectorError(f"set {names} before running Agent evaluation")
         if not model.strip() or not base_url.strip():
             raise ValueError("model and base_url must not be empty")
         if timeout <= 0 or max_retries < 0:
             raise ValueError("timeout must be positive and max_retries non-negative")
-        self.api_key = resolved_key.strip()
+        self.api_key = resolved_key.strip() if resolved_key else "not-required"
         self.model = model.strip()
         self.base_url = base_url.rstrip("/")
         self.timeout = float(timeout)
@@ -68,6 +103,13 @@ class DeepSeekSelector:
         if opener is None and self._curl_path is None:
             raise SelectorError("curl is required for verified HTTPS transport")
         self._sleeper = sleeper or time.sleep
+
+    def _api_key_from_environment(self) -> str | None:
+        for name in self.api_key_env_names:
+            value = os.environ.get(name)
+            if value:
+                return value
+        return None
 
     @property
     def url(self) -> str:
@@ -85,10 +127,7 @@ class DeepSeekSelector:
             "type": "function",
             "function": {
                 "name": "select_product",
-                "description": (
-                    "Select exactly one product from the supplied BM25 Top-5 and "
-                    "choose only available option values shown for that product."
-                ),
+                "description": self.tool_description,
                 "parameters": {
                     "type": "object",
                     "additionalProperties": False,
@@ -105,15 +144,7 @@ class DeepSeekSelector:
             },
         }
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是购物推荐决策 Agent。BM25 检索已经结束。你只能比较用户消息中"
-                    "给出的候选，必须选择恰好一个候选 ASIN，并仅从该商品明确列出的可用"
-                    "规格值中选择。不得搜索、虚构商品或规格。仔细匹配用途、属性、品牌、"
-                    "型号、预算和规格；BM25 排名只是参考。最后只调用 select_product。"
-                ),
-            },
+            {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
                 "content": json.dumps(
@@ -126,27 +157,28 @@ class DeepSeekSelector:
                 ),
             },
         ]
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "tools": [tool],
-            "tool_choice": {
+        }
+        if self.supports_forced_tool_choice:
+            payload["tool_choice"] = {
                 "type": "function",
                 "function": {"name": "select_product"},
-            },
-            # DeepSeek V4 defaults to thinking mode, which rejects forced
-            # function selection.  This benchmark needs a single auditable
-            # terminal call, so use non-thinking mode explicitly.
-            "thinking": {"type": "disabled"},
-            "temperature": self.temperature,
-            "stream": False,
-        }
+            }
+        # DeepSeek V4 defaults to thinking mode, which rejects forced function
+        # selection.  This benchmark needs a single auditable terminal call, so
+        # use non-thinking mode explicitly where the backend understands it.
+        payload.update(self.extra_payload)
+        payload["temperature"] = self.temperature
+        payload["stream"] = False
         response = self._request(payload)
         decision = self._parse_decision(response)
         usage = self._parse_usage(response.get("usage"))
         return SelectorResult(
             decision=decision,
-            provider="deepseek",
+            provider=self.provider_name,
             model=self.model,
             usage=usage,
             response_id=str(response.get("id")) if response.get("id") else None,
@@ -324,3 +356,103 @@ class DeepSeekSelector:
             )
         except (TypeError, ValueError):
             return None
+
+
+class DeepSeekSelector(ChatCompletionsSelector):
+    """Paid remote selector; the historical default behaviour."""
+
+    provider_name = "deepseek"
+    label = "DeepSeek"
+    require_api_key = True
+    api_key_env_names = ("DEEPSEEK_API_KEY", "DEEPSEEK_API")
+    extra_payload = {"thinking": {"type": "disabled"}}
+    supports_forced_tool_choice = True
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str = DEFAULT_MODEL,
+        base_url: str = DEFAULT_BASE_URL,
+        timeout: float = 60.0,
+        max_retries: int = 2,
+        temperature: float = 0.0,
+        opener: Callable[..., Any] | None = None,
+        sleeper: Callable[[float], None] | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            opener=opener,
+            sleeper=sleeper,
+        )
+
+
+class OllamaSelector(ChatCompletionsSelector):
+    """Local selector backed by an Ollama server; no per-token cost."""
+
+    provider_name = "ollama"
+    label = "Ollama"
+    require_api_key = False
+    api_key_env_names = ("OLLAMA_API_KEY",)
+    # Selecting one product from five fixed candidates needs format compliance,
+    # not deliberation.  Measured on qwen3:8b: default thinking spent 662
+    # completion tokens on a trivial prompt, while ``reasoning_effort: none``
+    # spent 4.  Ollama ignores this field on non-reasoning models (verified on
+    # qwen2.5), so it is a safe default for every local model.
+    extra_payload: Mapping[str, Any] = {"reasoning_effort": "none"}
+    # Ollama honours a forced function choice ("required" and named-function
+    # forms both verified), so the single terminal call stays deterministic.
+    supports_forced_tool_choice = True
+    # A 7B local model mirrors the nested customization_options structure it is
+    # shown, so spell out the flattened shape it must produce. DeepSeek does not
+    # need this, and its prompt is deliberately left untouched.
+    tool_description = (
+        "Select exactly one product from the supplied BM25 Top-5 and "
+        "choose only available option values shown for that product. "
+        "selected_options must map every option name to exactly ONE "
+        "string, copied from that option's available 'value' entries; "
+        "never copy the surrounding object or list. Example: "
+        '{"asin":"A001","selected_options":{"颜色":"白色"},'
+        '"reason":"匹配需求"}'
+    )
+    system_prompt = (
+        "你是购物推荐决策 Agent。BM25 检索已经结束。你只能比较用户消息中"
+        "给出的候选，必须选择恰好一个候选 ASIN，并仅从该商品明确列出的可用"
+        "规格值中选择。不得搜索、虚构商品或规格。仔细匹配用途、属性、品牌、"
+        "型号、预算和规格；BM25 排名只是参考。"
+        "候选的 customization_options 是一个对象：键是规格名（例如"
+        "「规格描述」），值是该规格下的候选列表，列表元素形如"
+        "{\"value\":\"海军蓝700毫升\",\"is_available\":true}。"
+        "selected_options 的键必须用规格名本身，值必须用元素里的 value 字符串，"
+        "例如 {\"规格描述\":\"海军蓝700毫升\"}；"
+        "不要把 value/is_available/price/asin 这些内层字段当作规格名，"
+        "也不要输出数组或对象。最后只调用 select_product。"
+    )
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str = OLLAMA_MODEL,
+        base_url: str = OLLAMA_BASE_URL,
+        timeout: float = 120.0,
+        max_retries: int = 2,
+        temperature: float = 0.0,
+        opener: Callable[..., Any] | None = None,
+        sleeper: Callable[[float], None] | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            temperature=temperature,
+            opener=opener,
+            sleeper=sleeper,
+        )

@@ -31,9 +31,12 @@ from .catalog import CatalogError
 from .env import DotEnvError, load_dotenv
 from .harness import HarnessError, ShoppingHarness
 from .providers import (
-    DEFAULT_BASE_URL,
-    DEFAULT_MODEL,
+    DEFAULT_BASE_URLS,
+    DEFAULT_MODELS,
+    DEFAULT_TIMEOUTS,
+    PROVIDER_NAMES,
     DeepSeekProvider,
+    OllamaProvider,
     ProviderError,
 )
 from .tasks import TaskStoreError
@@ -267,16 +270,28 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_INDEX_PATH,
     )
     parser.add_argument("--skill-dir", type=Path)
-    parser.add_argument("--provider", choices=("deepseek",), default="deepseek")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--provider",
+        choices=("deepseek", "ollama"),
+        default="deepseek",
+        help=(
+            "Model backend: 'deepseek' calls the paid remote API, 'ollama' calls "
+            "a local OpenAI-compatible server at no per-token cost (default: deepseek)."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name; defaults to the selected provider's default.",
+    )
     parser.add_argument(
         "--tool-choice",
         choices=("auto", "required"),
         default="auto",
         help="Provider tool policy; auto supports DeepSeek thinking mode.",
     )
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--timeout", type=_positive_float, default=60.0)
+    parser.add_argument("--base-url", default=None)
+    parser.add_argument("--timeout", type=_positive_float, default=None)
     parser.add_argument("--max-retries", type=_non_negative_int, default=2)
     parser.add_argument("--retry-backoff", type=_non_negative_float, default=0.5)
     parser.add_argument(
@@ -309,6 +324,8 @@ def _add_embedding_arguments(parser):
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if hasattr(args, "provider"):
+        _resolve_provider_defaults(args)
     try:
         if args.command == "schema":
             from .agent import contracts
@@ -462,7 +479,12 @@ def _interactive_command(args, branch):
         )
         max_steps = paused.session.state.max_steps
         args.max_model_turns = paused.manifest["max_model_turns"]
+        # Restore the backend that produced the checkpoint so a resume keeps
+        # using the same model, endpoint, and provider identity.
+        args.provider = paused.manifest.get("provider", args.provider)
         args.model = paused.model
+        args.base_url = paused.manifest.get("base_url", args.base_url)
+        _resolve_provider_defaults(args)
         args.tool_choice = paused.manifest["tool_choice"]
         if args.provider_parameters is None:
             if _has_redacted_value(paused.manifest["provider_parameters"]):
@@ -657,10 +679,43 @@ def _rollout_command(
     return 0
 
 
-def _build_provider(args: argparse.Namespace) -> DeepSeekProvider:
+def _resolve_provider_defaults(args: argparse.Namespace) -> None:
+    """Fill provider-dependent defaults once ``--provider`` is known.
+
+    ``--model``, ``--base-url`` and ``--timeout`` default to ``None`` so the
+    selected backend supplies its own values.  Anything already set on ``args``
+    (an explicit flag, or a value restored from a checkpoint) is preserved.
+
+    A checkpoint may name a provider injected through the Python API rather
+    than one of the CLI backends, so unknown names fall back to the historical
+    DeepSeek defaults instead of failing; ``_provider_class`` enforces the
+    whitelist when a client is actually built.
+    """
+    fallbacks = {
+        "model": DEFAULT_MODELS.get(args.provider, DEFAULT_MODELS["deepseek"]),
+        "base_url": DEFAULT_BASE_URLS.get(args.provider, DEFAULT_BASE_URLS["deepseek"]),
+        "timeout": DEFAULT_TIMEOUTS.get(args.provider, DEFAULT_TIMEOUTS["deepseek"]),
+    }
+    for name, value in fallbacks.items():
+        if getattr(args, name, None) is None:
+            setattr(args, name, value)
+
+
+def _provider_class(name: str):
+    """Resolve a backend class; module-level names keep patching in tests working."""
+    if name == "ollama":
+        return OllamaProvider
+    if name == "deepseek":
+        return DeepSeekProvider
+    raise CLIError(
+        f"unknown provider {name!r}; expected one of {', '.join(PROVIDER_NAMES)}"
+    )
+
+
+def _build_provider(args: argparse.Namespace):
     parameters = dict(args.provider_parameters or {})
     parameters.setdefault("temperature", args.temperature)
-    return DeepSeekProvider(
+    return _provider_class(args.provider)(
         model=args.model,
         base_url=args.base_url,
         timeout=args.timeout,

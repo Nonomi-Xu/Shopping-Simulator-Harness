@@ -3,13 +3,15 @@
 from .catalog import BM25Catalog
 from .evaluator import evaluate_decision
 from .pipeline import BM25AgentPipeline
-from .provider import DeepSeekSelector
+from .provider import ChatCompletionsSelector, DeepSeekSelector, OllamaSelector
 from .tasks import TaskStore
 
 __all__ = [
     "BM25AgentPipeline",
     "BM25Catalog",
+    "ChatCompletionsSelector",
     "DeepSeekSelector",
+    "OllamaSelector",
     "TaskStore",
     "evaluate_decision",
 ]

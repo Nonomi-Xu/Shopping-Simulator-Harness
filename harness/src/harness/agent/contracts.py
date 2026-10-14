@@ -161,6 +161,7 @@ class RuntimeConfig(Contract):
     max_actions: int = Field(default=40, ge=1, strict=True)
     max_searches: int = Field(default=6, ge=1, strict=True)
     max_repeated_actions: int = Field(default=2, ge=1, strict=True)
+    max_batch_calls: int = Field(default=8, ge=1, le=20, strict=True)
     max_total_tokens: int | None = Field(default=None, ge=1, strict=True)
     max_duration_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     context_max_chars: int = Field(default=80000, ge=2000, strict=True)

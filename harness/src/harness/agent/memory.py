@@ -218,24 +218,59 @@ class MemoryStore:
         self.state = self.state.model_copy(update={"candidates": candidates}, deep=True)
 
     def read_evidence(self, request: ReadEvidence) -> dict:
-        """Page exact scalar fragments from this run's already observed details."""
+        """Page exact scalar fragments from this run's already observed details.
+
+        The read merges every detail observation recorded for the ASIN, so a field
+        an earlier ``get_product`` returned stays readable even when the pinned
+        observation did not request it. Each fragment reports the observation that
+        actually returned its field, because ``record_evidence`` validates a
+        citation against that exact observation. A path that cannot be resolved is
+        reported in ``missing_field_paths`` instead of failing the whole call, and
+        ``available_field_paths`` lists what this session can serve.
+        """
         candidate = self.state.candidates.get(request.asin)
         if candidate is None or not candidate.inspected:
             raise ValueError("read_evidence requires an inspected candidate")
-        observation_id = request.observation_id or candidate.detail_observation_id
-        detail = self.state.evidence_archive.get(observation_id)
-        if detail is None or detail.asin != request.asin:
+        if (
+            request.observation_id is not None
+            and request.observation_id not in candidate.observation_ids
+        ):
             raise ValueError(
                 "unknown detail observation for this candidate in this session"
             )
-        data = detail.model_dump(mode="json")
-        observed = self.state.detail_fields.get(observation_id, list(data))
-        data = {key: value for key, value in data.items() if key in observed}
-        paths = request.field_paths or [f"/{key}" for key in data]
-        fragments = []
+        merged, sources = observed_product(
+            self.state, request.asin, prefer=request.observation_id
+        )
+        raw = merged.model_dump(mode="json")
+        # ProductDetail fills defaults for fields this session never observed;
+        # serving those would fabricate evidence, so keep only observed fields.
+        data = {key: value for key, value in raw.items() if key in sources}
+        available = sorted(f"/{key}" for key in data)
+        paths = request.field_paths or available
+        fragments: list[dict] = []
+        missing: list[dict] = []
         seen = set()
         for path in paths:
-            for field_path, value in scalar_fields(resolve_pointer(data, path), path):
+            try:
+                resolved = resolve_pointer(data, path)
+            except ValueError as error:
+                # An unobserved field is reported, never served, and never treated
+                # as an empty value: "not observed" and "observed as empty" differ.
+                missing.append(
+                    {
+                        "field_path": path,
+                        "reason": "not observed in this session",
+                        "detail": str(error),
+                    }
+                )
+                continue
+            top_field = (
+                path.split("/")[1].replace("~1", "/").replace("~0", "~")
+                if "/" in path[1:]
+                else path[1:].replace("~1", "/").replace("~0", "~")
+            )
+            source_id = sources.get(top_field, candidate.detail_observation_id)
+            for field_path, value in scalar_fields(resolved, path):
                 if field_path in seen:
                     continue
                 seen.add(field_path)
@@ -247,19 +282,31 @@ class MemoryStore:
                                 "value": value[start : start + 1000],
                                 "character_offset": start,
                                 "total_characters": len(value),
+                                "source_observation_id": source_id,
                             }
                         )
                 else:
-                    fragments.append({"field_path": field_path, "value": value})
-        if request.offset > len(fragments):
-            raise ValueError("evidence offset exceeds the available fragments")
+                    fragments.append(
+                        {
+                            "field_path": field_path,
+                            "value": value,
+                            "source_observation_id": source_id,
+                        }
+                    )
+        # Paging past the end is a normal end-of-traversal, not an error.
+        offset_out_of_range = request.offset > len(fragments)
         items = []
         # Bound the serialized data, including metadata, independently of the context budget.
         response = {
             "asin": request.asin,
-            "source": self.state.evidence_sources.get(observation_id),
-            "source_observation_id": observation_id,
-            "field_paths": paths,
+            "source": self.state.evidence_sources.get(
+                candidate.detail_observation_id
+            ),
+            "source_observation_id": candidate.detail_observation_id,
+            "field_sources": sources,
+            "available_field_paths": available,
+            "requested_field_paths": paths,
+            "missing_field_paths": missing,
             "items": items,
             "total_fragments": len(fragments),
             "next_offset": None,
@@ -279,6 +326,7 @@ class MemoryStore:
             items.append(fragment)
         end = request.offset + len(items)
         response["next_offset"] = end if end < len(fragments) else None
+        response["offset_out_of_range"] = offset_out_of_range
         if len(json.dumps(response, ensure_ascii=False)) > 12000:
             raise ValueError(
                 "evidence metadata exceeds response budget; narrow field_paths"
@@ -392,6 +440,8 @@ class MemoryStore:
             "source": self.state.evidence_sources.get(candidate.detail_observation_id),
             "field_sources": sources,
             "unobserved_fields": sorted(set(ProductDetail.model_fields) - set(sources)),
+            # Exactly the pointers read_evidence can serve for this candidate.
+            "readable_field_paths": sorted(f"/{key}" for key in sources),
             "price_min": detail.price_min,
             "price_max": detail.price_max,
             "price_scope": "product_range_not_selected_variant",
@@ -411,14 +461,22 @@ class MemoryStore:
 
 
 def observed_product(
-    memory: WorkingMemory, asin: str
+    memory: WorkingMemory, asin: str, *, prefer: str | None = None
 ) -> tuple[ProductDetail, dict[str, str]]:
-    """Merge only fields actually returned, retaining original citation ownership."""
+    """Merge only fields actually returned, retaining original citation ownership.
+
+    ``prefer`` names one observation whose fields win when several observations
+    returned the same field. It is applied last so its provenance is the one
+    reported, which keeps a citation valid when the caller pinned an observation.
+    """
     candidate = memory.candidates.get(asin)
     if candidate is None or not candidate.inspected:
         raise ValueError("product must be inspected in this session")
+    order = [oid for oid in candidate.observation_ids if oid != prefer]
+    if prefer is not None and prefer in candidate.observation_ids:
+        order.append(prefer)
     data, sources = {}, {}
-    for oid in candidate.observation_ids:
+    for oid in order:
         detail = memory.evidence_archive.get(oid)
         if detail is None or detail.asin != asin:
             continue

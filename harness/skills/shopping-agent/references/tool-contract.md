@@ -1,6 +1,13 @@
 # Harness Tool Contract
 
-Use exactly one tool call per assistant turn. Names and arguments are
+Use one tool call per assistant turn, except that independent read-only calls may
+share one turn as a bounded batch. The batchable tools are `get_product`,
+`read_evidence`, `verify_selection` and `compare_products`; a turn may contain at
+most eight of them. Every call in a batch is executed and each returns its own
+observation, in the order you sent them. Batch only calls that do not depend on
+each other's results: never batch a call whose arguments you would have to read
+from another call's observation in the same turn. Planning, evidence-recording,
+search and submission calls stay one per turn. Names and arguments are
 case-sensitive; unknown fields are invalid. The provider receives only the
 tools available in the current state. Every attempted tool call consumes one
 runtime action. Only dispatched environment calls consume a Harness step.
@@ -39,6 +46,24 @@ For user_message, source_message_id must identify an authentic TaskProfile user
 reply and source_quote must occur in that reply. A caller may explicitly remove
 constraints when resuming; preserve every remaining hard constraint. The original
 query remains available alongside the revision history.
+
+`predicate.value` is checked against its `source_quote`:
+
+- A numeric bound must be grounded. Use the amount the quote states, or — when
+  the quote states an approximate amount (`左右`/`大概`/`大约`/`约`/`上下`/
+  `差不多`/`出头`/`X多`) — a `le` ceiling at or above it, up to 1.5x it or
+  +10 price units, whichever is larger. Environment v2 freezes 1.1x as the
+  intended tolerance; prefer it. A ceiling *below* a strict stated maximum is
+  rejected, because it would filter out products the shopper accepts. Chinese
+  numerals count as stated amounts (`两千元以内` states 2000).
+- `brand` and `option` values must appear literally in the quote. A brand or
+  option string you were not given is a fabrication.
+- `category` and `attribute` values need not be literal: they are your catalog
+  mapping of the requirement the quote expresses, so `小工具` may become `模具`
+  and `很快就能干` may become `速干`. The quote remains the audit anchor.
+
+A rejected predicate returns the accepted values in its error message; correct
+the number instead of resubmitting the same plan.
 
 ### `ask_user` (interactive mode only)
 
@@ -97,22 +122,35 @@ whole batch. This costs one runtime action and zero environment steps.
 ### `read_evidence`
 
 ```json
-{"asin": "an-inspected-asin", "field_paths": ["/attributes", "/customization_options"], "offset": 0, "limit": 10}
+{"asin": "an-inspected-asin", "offset": 0, "limit": 10}
 ```
 
-Reads only details previously returned in this session. Optional observation_id
-selects a particular successful original detail observation; otherwise the latest
-detail is used. Omit field_paths to traverse all public fields. Each path may
-identify a scalar or a container. The response flattens containers into scalar
-fragments and returns source_observation_id, items, total_fragments and next_offset.
+Reads details this session already returned for the ASIN, merged across every
+`get_product` you made for it. A field fetched by an earlier call stays readable
+even when a later call requested something else, and `available_field_paths`
+lists exactly what this session can serve. The example above omits `field_paths`
+so the whole observable detail is traversed; that is the safe default.
 
-Each item has field_path and value. Long strings are split into exact fragments
-of up to 1000 characters, with character_offset and total_characters. At most 20
-fragments and 12000 serialized data characters are returned. Continue with the
-same ASIN, observation_id, field_paths and next_offset as offset. A null
-next_offset ends the selected traversal; it does not imply that unrelated fields
-were examined. Cite source_observation_id and the fragment's field_path when
-recording evidence. This costs one action and zero environment steps.
+Pass `field_paths` only with JSON Pointers you have seen, such as `/attributes`
+or `/customization_options/颜色/0/value`. Each path may identify a scalar or a
+container; containers are flattened into scalar fragments. A path this session
+cannot resolve is reported in `missing_field_paths` and the remaining paths are
+still served, so one wrong path does not cost the whole call.
+
+Optional `observation_id` prefers a particular observation's provenance when
+several returned the same field; it no longer narrows the read.
+
+The response carries `available_field_paths`, `field_sources`, `items`,
+`total_fragments`, `next_offset` and `offset_out_of_range`. Each item has
+`field_path`, `value` and the `source_observation_id` that actually returned that
+field. Long strings are split into exact fragments of up to 1000 characters, with
+`character_offset` and `total_characters`. At most 20 fragments and 12000
+serialized characters are returned. Continue with the same ASIN and
+`next_offset` as `offset`. A null `next_offset` ends the traversal; paging past
+the end returns an empty page with `offset_out_of_range: true` rather than an
+error. Cite the item's own `source_observation_id` and `field_path` when
+recording evidence — a citation is validated against the observation that
+returned the field. This costs one action and zero environment steps.
 
 ## Environment tools
 

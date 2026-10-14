@@ -55,7 +55,10 @@ the session terminates.
 
 ## Behavioral boundaries
 
-- Call exactly one runtime or Harness tool per assistant turn.
+- Call one runtime or Harness tool per assistant turn. Independent read-only
+  calls (`get_product`, `read_evidence`, `verify_selection`, `compare_products`)
+  may share one turn, up to eight; no call in a batch may depend on another
+  call's result in the same turn.
 - Do not call `get_product` for an ASIN that has not appeared in search results.
 - Do not recommend an ASIN that has not been inspected.
 - Complete requirement analysis with `update_plan` before submitting. Verified

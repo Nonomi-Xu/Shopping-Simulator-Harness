@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..providers import ToolDefinition
+from ..constraints import APPROXIMATE_MAX_SLACK, APPROXIMATE_TOLERANCE
 from ..schemas import (
     GetProductAction,
     SearchProductsAction,
@@ -85,7 +86,13 @@ class ToolRegistry:
                     "Create or revise a concise search plan. Quote the query for explicit "
                     "constraints; keep existing hard constraints unchanged. Background "
                     "preferences and inferences must be soft. Empty constraints require "
-                    "no_constraints_reason. A valid update marks requirements parsed."
+                    "no_constraints_reason. A valid update marks requirements parsed. "
+                    "A numeric predicate must be grounded in its source_quote: use the "
+                    "amount the quote states, or, for an approximate amount (左右/大概/"
+                    f"约), a ceiling up to {APPROXIMATE_MAX_SLACK:g}x it (Environment v2 "
+                    f"freezes {APPROXIMATE_TOLERANCE:g}x). Brand and option values must "
+                    "appear literally; category and attribute values are your catalog "
+                    "mapping of the quoted requirement."
                 ),
             ),
             ToolDefinition.from_action_model(

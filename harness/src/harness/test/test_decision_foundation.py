@@ -468,9 +468,23 @@ class DecisionFoundationTest(unittest.TestCase):
                 ),
             ]
         )
-        self.assertTrue(
-            all(o["status"] == "rejected" for o in observations(result)[2:])
+        reads = observations(result)[2:]
+        # A product this session never inspected, and an observation that belongs
+        # to another session, are still hard rejections.
+        self.assertEqual([o["status"] for o in reads[:2]], ["rejected", "rejected"])
+        # An unobserved field no longer costs the whole call, but it is reported
+        # rather than served, and never presented as an empty value.
+        self.assertEqual(reads[2]["status"], "success")
+        self.assertEqual(reads[2]["data"]["items"], [])
+        self.assertEqual(
+            [m["field_path"] for m in reads[2]["data"]["missing_field_paths"]],
+            ["/private_label"],
         )
+        self.assertEqual(
+            reads[2]["data"]["missing_field_paths"][0]["reason"],
+            "not observed in this session",
+        )
+        self.assertNotIn("/private_label", reads[2]["data"]["available_field_paths"])
         self.assertEqual(result.tool_call_count, 2)
         self.assertEqual(len(result.memory.evidence_archive), 1)
 

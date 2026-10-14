@@ -14,6 +14,7 @@ from ..providers import (
     ModelProvider,
     ProviderError,
     TokenUsage,
+    ToolCall,
     canonical_json,
 )
 from ..schemas import SessionSnapshot
@@ -47,6 +48,20 @@ from .skill import AgentSkill, load_agent_skill
 from .tools import ToolRegistry
 from .submission import SubmissionNotReady, check_submission
 from .multiagent import MultiAgentCoordinator, ROLE_TOOLS
+
+
+#: Read-only tools that may share one assistant turn.  Test1 showed 67/500 tasks
+#: (13.4%) ended with ``multiple_tool_calls`` while every one of those turns was a
+#: set of independent read-only calls -- 90% of them reads of the gold candidate.
+#: Each call still costs its own runtime action and environment step.
+BATCHABLE_TOOLS = frozenset(
+    {
+        "get_product",
+        "read_evidence",
+        "verify_selection",
+        "compare_products",
+    }
+)
 
 
 @runtime_checkable
@@ -504,88 +519,180 @@ class _Run:
             )
             if not turn.tool_calls:
                 return self.finish("failed", "model_stopped_without_submission")
-            if len(turn.tool_calls) != 1:
-                return self.finish("failed", "multiple_tool_calls")
-            if reason := self.limit_reason():
-                return self.finish("terminated", reason)
-            call = turn.tool_calls[0]
-            action = AgentAction(
-                action_id=f"{self.session_id}:action_{self.actions + 1:04d}",
-                session_id=self.session_id,
-                sequence=self.actions + 1,
-                plan_id=self.plan.plan_id,
-                plan_revision=self.plan.revision,
-                tool_call_id=call.id,
-                tool_name=call.name,
-                arguments=call.arguments,
-                task_revision=self.task.revision,
-                agent_role=self.coordinator.role if self.coordinator else "single",
-            )
-            action_event = self.events.append(
-                "action", action.model_dump(mode="json"), turn_event.event_id
-            )
-            budget_before = self.budget()
-            self.actions += 1
-            previous_plan = self.plan
-            observation = self.perform(action, call, budget_before)
-            if self.coordinator:
-                self.coordinator.after_action(call.name, call.arguments, observation, self.task)
-                self.events.append(
-                    "agent_handoff", self.coordinator.snapshot(), action_event.event_id
-                )
-                observation = observation.model_copy(update={
-                    "allowed_next_tools": [] if observation.terminated or self.pending_question
-                    else self.allowed(self.budget())
-                })
-            obs_event = self.events.append(
-                "observation",
-                observation.model_dump(mode="json"),
-                action_event.event_id,
-            )
-            self.memory.observe(observation)
-            if not observation.terminated and self.pending_question is None:
-                self.plan = owner.planner.advance(
-                    self.plan,
-                    self.task,
-                    self.memory.state,
-                    self.budget().searches_remaining,
-                )
-            if self.plan != previous_plan:
-                self.events.append(
-                    "plan_updated",
-                    {
-                        "plan": self.plan.model_dump(mode="json"),
-                        "task_profile": self.task.model_dump(mode="json"),
-                    },
-                    obs_event.event_id,
-                )
-            self.events.append(
-                "memory_updated",
-                self.memory.state.model_dump(mode="json"),
-                obs_event.event_id,
-            )
-            self.messages.append(
-                ChatMessage(
-                    role="tool",
-                    tool_call_id=call.id,
-                    name=call.name,
-                    content=canonical_json(observation.model_dump(mode="json")),
-                )
-            )
+            calls = list(turn.tool_calls)
+            executable, refusal = self._batch_prefix(calls)
+            terminal: AgentObservation | None = None
+            for index, call in enumerate(calls):
+                if terminal is not None or self.pending_question is not None:
+                    observation = self._refuse_call(
+                        call,
+                        turn_event,
+                        "session_closed",
+                        "an earlier call in this same turn already closed the session; "
+                        "this call was not executed",
+                    )
+                elif index >= executable:
+                    observation = self._refuse_call(
+                        call,
+                        turn_event,
+                        refusal or "batch_not_supported",
+                        self._batch_refusal_message(refusal, index, len(calls)),
+                    )
+                else:
+                    if reason := self.limit_reason():
+                        return self.finish("terminated", reason)
+                    observation = self._execute_call(call, turn_event)
+                if terminal is None and observation.terminated:
+                    terminal = observation
             if self.pending_question is not None:
                 return self.finish("waiting_for_user", "user_input_required")
-            if observation.terminated:
+            if terminal is not None:
                 return self.finish(
                     (
                         "completed"
-                        if observation.terminal_reason == "submitted"
+                        if terminal.terminal_reason == "submitted"
                         else "terminated"
                     ),
-                    observation.terminal_reason,
+                    terminal.terminal_reason,
                 )
         if reason := self.limit_reason():
             return self.finish("terminated", reason)
         return self.finish("failed", "max_model_turns")
+
+    def _batch_prefix(self, calls: list[ToolCall]) -> tuple[int, str | None]:
+        """Decide how many calls of one assistant turn the runtime will execute.
+
+        Only read-only tools may share a turn, and only up to the configured
+        bound.  Any other shape executes its first call and answers the rest with
+        a corrective rejection, so a turn the runtime cannot honour no longer ends
+        the run without executing anything.
+        """
+        if len(calls) == 1:
+            return 1, None
+        limit = self.owner.config.max_batch_calls
+        if all(call.name in BATCHABLE_TOOLS for call in calls):
+            if len(calls) <= limit:
+                return len(calls), None
+            return limit, "batch_limit_exceeded"
+        return 1, "batch_not_supported"
+
+    def _batch_refusal_message(
+        self, refusal: str | None, index: int, total: int
+    ) -> str:
+        if refusal == "batch_limit_exceeded":
+            return (
+                f"executed the first {index} of {total} calls: at most "
+                f"{self.owner.config.max_batch_calls} read-only calls may share one "
+                "turn. Resubmit the remaining calls in a smaller batch."
+            )
+        return (
+            f"executed only the first of {total} calls: a turn may batch only the "
+            f"read-only tools {sorted(BATCHABLE_TOOLS)}. Resubmit the remaining "
+            "calls one at a time."
+        )
+
+    def _new_action(self, call: ToolCall) -> AgentAction:
+        return AgentAction(
+            action_id=f"{self.session_id}:action_{self.actions + 1:04d}",
+            session_id=self.session_id,
+            sequence=self.actions + 1,
+            plan_id=self.plan.plan_id,
+            plan_revision=self.plan.revision,
+            tool_call_id=call.id,
+            tool_name=call.name,
+            arguments=call.arguments,
+            task_revision=self.task.revision,
+            agent_role=self.coordinator.role if self.coordinator else "single",
+        )
+
+    def _append_tool_message(self, call: ToolCall, observation: AgentObservation) -> None:
+        self.messages.append(
+            ChatMessage(
+                role="tool",
+                tool_call_id=call.id,
+                name=call.name,
+                content=canonical_json(observation.model_dump(mode="json")),
+            )
+        )
+
+    def _record_observation(self, observation: AgentObservation, action_event):
+        obs_event = self.events.append(
+            "observation",
+            observation.model_dump(mode="json"),
+            action_event.event_id,
+        )
+        self.memory.observe(observation)
+        return obs_event
+
+    def _refuse_call(
+        self, call: ToolCall, turn_event, error_code: str, message: str
+    ) -> AgentObservation:
+        """Answer a call the batch policy declined to execute.
+
+        The call still consumes one runtime action and records a normal
+        action/observation pair, so the audit and the one-result-per-tool-call
+        protocol stay complete.
+        """
+        action = self._new_action(call)
+        action_event = self.events.append(
+            "action", action.model_dump(mode="json"), turn_event.event_id
+        )
+        self.actions += 1
+        observation = self.internal_observation(
+            action, status="rejected", error_code=error_code, message=message
+        )
+        obs_event = self._record_observation(observation, action_event)
+        self.events.append(
+            "memory_updated",
+            self.memory.state.model_dump(mode="json"),
+            obs_event.event_id,
+        )
+        self._append_tool_message(call, observation)
+        return observation
+
+    def _execute_call(self, call: ToolCall, turn_event) -> AgentObservation:
+        owner = self.owner
+        action = self._new_action(call)
+        action_event = self.events.append(
+            "action", action.model_dump(mode="json"), turn_event.event_id
+        )
+        budget_before = self.budget()
+        self.actions += 1
+        previous_plan = self.plan
+        observation = self.perform(action, call, budget_before)
+        if self.coordinator:
+            self.coordinator.after_action(call.name, call.arguments, observation, self.task)
+            self.events.append(
+                "agent_handoff", self.coordinator.snapshot(), action_event.event_id
+            )
+            observation = observation.model_copy(update={
+                "allowed_next_tools": [] if observation.terminated or self.pending_question
+                else self.allowed(self.budget())
+            })
+        obs_event = self._record_observation(observation, action_event)
+        if not observation.terminated and self.pending_question is None:
+            self.plan = owner.planner.advance(
+                self.plan,
+                self.task,
+                self.memory.state,
+                self.budget().searches_remaining,
+            )
+        if self.plan != previous_plan:
+            self.events.append(
+                "plan_updated",
+                {
+                    "plan": self.plan.model_dump(mode="json"),
+                    "task_profile": self.task.model_dump(mode="json"),
+                },
+                obs_event.event_id,
+            )
+        self.events.append(
+            "memory_updated",
+            self.memory.state.model_dump(mode="json"),
+            obs_event.event_id,
+        )
+        self._append_tool_message(call, observation)
+        return observation
 
     def perform(self, action, call, budget_before) -> AgentObservation:
         owner = self.owner
