@@ -12,6 +12,15 @@ case-sensitive; unknown fields are invalid. The provider receives only the
 tools available in the current state. Every attempted tool call consumes one
 runtime action. Only dispatched environment calls consume a Harness step.
 
+Every observation carries `status`, `message` and `error_code`; a rejection is
+corrective and must be read before retrying. The acknowledgement of a runtime tool
+(`update_plan`, `record_evidence`, `record_evidence_batch`) is intentionally
+terse: it repeats neither the plan nor the recorded assessments, because the next
+state message already carries them. Its per-assessment verdicts are kept as
+`{asin, constraint_id, status}` so a candidate that has left the bounded candidate
+window is still visible. Read the plan and the assessment detail from the next
+state message instead of calling the tool again to see them.
+
 ## Runtime tools
 
 ### `update_plan`

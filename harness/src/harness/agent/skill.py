@@ -57,7 +57,13 @@ def default_shopping_skill_dir() -> Path:
 
 
 def load_agent_skill(skill_dir: str | Path | None = None) -> AgentSkill:
-    """Read SKILL.md and every directly declared Markdown reference."""
+    """Read SKILL.md and every directly declared Markdown reference.
+
+    References are rendered in declaration order, and that order is part of the
+    provider prefix a run sends on every turn.  Declaring the most stable
+    reference first keeps the cacheable prefix as long as possible when a later
+    reference is revised.
+    """
     directory = (
         default_shopping_skill_dir()
         if skill_dir is None

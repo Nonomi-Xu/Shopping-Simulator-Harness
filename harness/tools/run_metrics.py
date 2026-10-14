@@ -40,7 +40,11 @@ def quantile(values, p):
 
 
 def arm_directories(root: Path, include: str | None) -> list[Path]:
-    """Return one audit directory per (task, arm), preferring the newest attempt."""
+    """Return one audit directory per (task, arm), preferring the newest attempt.
+
+    Both audit layouts are accepted: ``tasks/<task>/<arm>/events.jsonl`` from the
+    benchmark runner and ``tasks/<task>/events.jsonl`` from a plain rollout.
+    """
     found: dict[tuple[str, str], Path] = {}
     if (root / 'events.jsonl').exists():
         return [root]
@@ -49,6 +53,10 @@ def arm_directories(root: Path, include: str | None) -> list[Path]:
         raise ValueError(f'{root} has no tasks/ or events.jsonl')
     for task_dir in sorted(tasks_root.iterdir()):
         if not task_dir.is_dir():
+            continue
+        if (task_dir / 'events.jsonl').exists():
+            if not include or include in task_dir.name:
+                found[(task_dir.name, task_dir.name)] = task_dir
             continue
         for arm_dir in sorted(task_dir.iterdir(), reverse=True):
             if not arm_dir.is_dir() or not (arm_dir / 'events.jsonl').exists():
@@ -60,6 +68,13 @@ def arm_directories(root: Path, include: str | None) -> list[Path]:
             if key not in found:
                 found[key] = arm_dir
     return [found[key] for key in sorted(found)]
+
+
+def task_arm_labels(directory: Path) -> tuple[str, str]:
+    """Return the (task, arm) labels of one audit directory."""
+    if directory.parent.name == 'tasks':
+        return directory.name, directory.name
+    return directory.parent.name, directory.name
 
 
 def read_events(directory: Path) -> list[dict]:
@@ -130,13 +145,22 @@ def analyse_arm(directory: Path) -> dict:
     errors = [r['payload'] for r in model_io if r['kind'] == 'error']
     usage_present = 0
     tokens = 0
+    cached_tokens = 0
+    cache_miss_tokens = 0
+    cache_turns = 0
     for turn in turns:
-        usage = turn.get('usage')
+        usage = turn['payload'].get('usage')
         if usage:
             usage_present += 1
             tokens += usage.get('total_tokens') or 0
+            cached, miss = usage.get('cached_input_tokens'), usage.get('cache_miss_input_tokens')
+            if cached is not None or miss is not None:
+                cache_turns += 1
+                cached_tokens += cached or 0
+                cache_miss_tokens += miss or 0
+    task, arm = task_arm_labels(directory)
     return {
-        'task': directory.parent.name, 'arm': directory.name,
+        'task': task, 'arm': arm,
         'terminal_reason': result.get('terminal_reason'),
         'status': result.get('status'),
         'model_turns': len(turns),
@@ -160,6 +184,12 @@ def analyse_arm(directory: Path) -> dict:
         'turns_with_usage': usage_present,
         'total_tokens_in_turns': tokens,
         'usage_complete': usage_present == len(turns) and len(turns) > 0,
+        # Provider-reported prefix-cache accounting (DeepSeek prompt_cache_*).
+        'turns_with_cache_usage': cache_turns,
+        'cached_input_tokens': cached_tokens,
+        'cache_miss_input_tokens': cache_miss_tokens,
+        'cache_hit_rate': (cached_tokens / (cached_tokens + cache_miss_tokens)
+                           if cached_tokens + cache_miss_tokens else None),
     }
 
 
@@ -173,6 +203,8 @@ def aggregate(arms: list[dict], label: str, root: Path) -> dict:
             by_tool.setdefault(tool, Counter()).update(counters)
             by_tool[tool]['task_arms_with_tool'] += 1
     tokens = [a['total_tokens_in_turns'] for a in arms if a['total_tokens_in_turns']]
+    cached_tokens = sum(a['cached_input_tokens'] for a in arms)
+    cache_miss_tokens = sum(a['cache_miss_input_tokens'] for a in arms)
     return {
         'label': label, 'run_dir': str(root.resolve()),
         'generated_utc': datetime.now(timezone.utc).isoformat(),
@@ -199,6 +231,13 @@ def aggregate(arms: list[dict], label: str, root: Path) -> dict:
         'total_tokens': {'sum_complete': sum(tokens),
                          'mean_complete': statistics.mean(tokens) if tokens else None,
                          'p50': quantile(tokens, .5), 'p95': quantile(tokens, .95)},
+        # Prefix-cache reuse: higher is cheaper, because cached input is billed at
+        # a lower price than a cache miss.
+        'arms_reporting_cache_usage': sum(1 for a in arms if a['turns_with_cache_usage']),
+        'cached_input_tokens': cached_tokens,
+        'cache_miss_input_tokens': cache_miss_tokens,
+        'cache_hit_rate': (cached_tokens / (cached_tokens + cache_miss_tokens)
+                           if cached_tokens + cache_miss_tokens else None),
         'tools': {tool: dict(counters) for tool, counters in sorted(by_tool.items())},
     }
 

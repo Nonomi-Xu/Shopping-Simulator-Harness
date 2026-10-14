@@ -160,7 +160,7 @@ def generate(root, bm25_run_dir=None):
     infrastructure_failure = any(infrastructure_counts.values())
     health={'status':'infrastructure_compromised' if infrastructure_failure else 'completed',
             'provider_errors':provider_errors, 'valid_for_algorithm_claims':not infrastructure_failure,
-            'note':'Only supports this Test1 system comparison; thinking, recommendation and search budgets differ.'}
+            'note':f'Only supports this {dataset["name"]} system comparison; thinking, recommendation and search budgets differ.'}
     health['infrastructure_task_counts'] = infrastructure_counts
     health['strict_at_1_sensitivity'] = {
         m: {'observed':sum(r['strict_at_1'] for r in rows)/len(rows),
@@ -192,10 +192,15 @@ def generate(root, bm25_run_dir=None):
     def cell(s,key):
         m=s[key];return f"{m['hits']}/{m['total']} ({pct(m['rate'])})"
     subset_line = (f"本批次是冻结的显式子集 `{config['subset']['name']}`（SHA-256 `{config['subset']['sha256']}`），"
-                   "由失败类型与对照题固定选出，不能当作 Test1 总体成绩。") if config.get('subset') else ''
-    lines=[f"# {dataset['name']}：BM25 与 Harness 新评测报告" + ("（仅预检，不是500题结果）" if config["smoke_limit"] else "") + (f"（冻结子集：{config['subset']['name']}，不是500题结果）" if config.get('subset') else ''),'',
-        f"本报告对照 {len(b)} 个共同任务 × 2 种方法。Original 共 {dataset['original_count']} 题；Test1 为源顺序展开后的第 1–500 题。"] + ([subset_line] if subset_line else []) + [
-        ('本报告使用全量重跑的 Harness 500 题，与已完成的同一 Test1 BM25 500 题配对；BM25 本次没有重复调用。' if bm25_run_dir else '本报告使用该批次的逐题结果。'), '',
+                   f"由失败类型与对照题固定选出，不能当作 {dataset['name']} 总体成绩。") if config.get('subset') else ''
+    selection=dataset.get('selection',{})
+    start,end=selection.get('start_1based'),selection.get('end_1based')
+    task_count=dataset.get('task_count',len(b))
+    dataset_desc=(f"{dataset['name']} 为源顺序展开后的第 {start}–{end} 题（{task_count} 题）"
+                  if start and end else f"{dataset['name']} 共 {task_count} 题")
+    lines=[f"# {dataset['name']}：BM25 与 Harness 新评测报告" + (f"（仅预检 {len(b)} 题，不是完整结果）" if config["smoke_limit"] else "") + (f"（冻结子集：{config['subset']['name']}，不是完整结果）" if config.get('subset') else ''),'',
+        f"本报告对照 {len(b)} 个共同任务 × 2 种方法。Original 共 {dataset['original_count']} 题；{dataset_desc}。"] + ([subset_line] if subset_line else []) + [
+        (f"本报告使用全量重跑的 Harness {len(b)} 题，与已完成的同一 {dataset['name']} BM25 {len(b)} 题配对；BM25 本次没有重复调用。" if bm25_run_dir else '本报告使用该批次的逐题结果。'), '',
         f"- Harness 批次：`{source_roots['harness']}`。",
         f"- BM25 批次：`{source_roots['bm25']}`。",
         '上一轮因余额不足/重定向导致的 Harness 失败结果未混入本次重跑统计。' if bm25_run_dir else '', '',
@@ -205,9 +210,9 @@ def generate(root, bm25_run_dir=None):
         '- 保留现有算法：BM25 固定 Top-5、一次选择；Harness 多轮工具调用、最多 5 件推荐。',
         '- Strict@1 必须第一件商品 ASIN、规格均正确且评分有效；Strict-any 允许命中推荐列表的任意位置，单独报告。',
         '- BM25 召回是固定 Top-5；Harness 召回是实际多轮搜索结果的并集，两者检索预算不同，不能解释为同预算检索器比较。',
-        '- 未提交、运行失败和不可评分任务保留在 500 题分母中；召回记录缺失另报覆盖率。',
+        f'- 未提交、运行失败和不可评分任务保留在 {len(b)} 题分母中；召回记录缺失另报覆盖率。',
         '- Token 仅统计 usage 完整的任务并报告覆盖率，不把未知消耗当作零费用。',
-        '- Test1 为前 500 题，不是随机样本；区间描述此任务样本的不确定性，不消除顺序/品类偏差；每题仅运行一次，未评估随机重复稳定性。','',
+        f'- {dataset_desc}，不是随机样本；区间描述此任务样本的不确定性，不消除顺序/品类偏差；每题仅运行一次，未评估随机重复稳定性。','',
         '## 新结果','', '| 指标 | BM25 | Harness |','|---|---:|---:|']
     for label,key in [('首件严格准确率','strict_at_1'),('首件 ASIN 命中率','asin_at_1'),('列表任意位置严格正确率','strict_any'),
         ('目标商品召回率（预算不同）','retrieval_hit'),('首次搜索 Top-5 召回率','first_search_top5_hit'),('目标详情已观察率','inspected_hit'),('有效评分覆盖率','reward_valid')]:
@@ -235,7 +240,7 @@ def generate(root, bm25_run_dir=None):
         '3. 选择与规格：对已召回但未选中、规格错误任务分别实验候选比较和合法规格约束；保留 ASIN@1 与 Strict@1 两种指标。',
         '4. 成本与停止：按实际 model_io/timeline 定位重复上下文与无收益动作，扫描搜索/动作/Token 预算；比较相同预算下的准确率及 P95 延迟。',
         '5. 自适应执行：以公开证据缺口决定 BM25 结果是否升级到 Harness，结合仅单方成功任务学习规则；路由阈值只能在开发数据上调优。',
-        '6. 后续评测：Test1 从本轮起作为诊断开发集；另冻结不重叠 Test2（例如源序号 501–1000）作留出集，并增加品类分层随机留出集来检查顺序偏差。最终候选在独立集上重复 3 次并报告配对区间。',
+        f'6. 后续评测：已评过的清单转为诊断开发集；另冻结不重叠的下一组（从本清单末尾继续取）作留出集，并增加品类分层随机留出集来检查顺序偏差。最终候选在独立集上重复 3 次并报告配对区间。',
         '7. 消融推理模式：本轮是现有系统对比，Thinking 配置不同；后续增加相同 Thinking/Token 预算的受控组，避免将模型推理量误认为框架收益。','',
         '## 文件索引','',
         '- `summary.json`：全部指标、配置、置信区间和配对统计。',

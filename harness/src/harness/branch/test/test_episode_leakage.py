@@ -17,6 +17,7 @@ class EpisodeLeakageTest(EpisodeFixture):
         self.assertTrue(result.evaluation.strict_success)
         before_budget = True
         for messages in provider.requests:
+            # The refreshed runtime state is the first user message of every turn.
             payload = json.loads(messages[1]["content"])
             text = json.dumps(messages, ensure_ascii=False)
             for forbidden in ['"target_product_id":', '"target_asin":', '"hidden_goal":', '"private_answer":', '"unrevealed_fields":', "PRIVATE_ANSWER_CANARY_731", "HIDDEN_ANSWER_CANARY_938"]:

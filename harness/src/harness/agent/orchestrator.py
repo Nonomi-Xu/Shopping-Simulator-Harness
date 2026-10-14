@@ -48,6 +48,7 @@ from .skill import AgentSkill, load_agent_skill
 from .tools import ToolRegistry
 from .submission import SubmissionNotReady, check_submission
 from .multiagent import MultiAgentCoordinator, ROLE_TOOLS
+from .tracing import require_tracing, traced
 
 
 #: Read-only tools that may share one assistant turn.  Test1 showed 67/500 tasks
@@ -113,6 +114,11 @@ class AgentOrchestrator:
         self.skill = skill or load_agent_skill(skill_dir)
         self.max_model_turns = max_model_turns
         self.config = (config or RuntimeConfig()).model_copy(deep=True)
+        require_tracing()
+        if self.config.orchestration_backend == "langgraph":
+            from .graph import require_langgraph
+
+            require_langgraph()
         self.profile = (profile or AgentProfile()).model_copy(deep=True)
         self.user_profile = (user_profile or UserProfile()).model_copy(deep=True)
         if (
@@ -174,7 +180,7 @@ class AgentOrchestrator:
         )
         validate_checkpoint(paused)
         if (
-            paused.manifest["config"] != self.config.model_dump(mode="json")
+            RuntimeConfig.model_validate(paused.manifest["config"]) != self.config
             or paused.manifest["max_model_turns"] != self.max_model_turns
             or paused.skill_sha256 != self.skill.source_sha256
             or paused.profile != self.profile
@@ -455,109 +461,126 @@ class _Run:
             return "max_actions"
         return None
 
+    @traced("run")
     def execute(self) -> AgentRunResult:
         try:
+            if self.owner.config.orchestration_backend == "langgraph":
+                from .graph import execute_graph
+
+                return execute_graph(self)
             return self._loop()
         except Exception as exc:
             return self.finish("failed", "runtime_error", error=exc)
 
     def _loop(self) -> AgentRunResult:
+        while True:
+            result = self._step()
+            if result is not None:
+                return result
+
+    @traced("turn")
+    def _step(self) -> AgentRunResult | None:
+        """One model turn, shared by the native and graph schedulers."""
         owner = self.owner
-        for _ in range(max(0, owner.max_model_turns - len(self.turns))):
+        if len(self.turns) >= owner.max_model_turns:
             if reason := self.limit_reason():
                 return self.finish("terminated", reason)
-            budget = self.budget()
-            allowed = self.allowed(budget)
-            try:
-                messages, context_metadata = owner.context_builder.build(
-                    system_prompt=owner.skill.system_prompt + (
-                        self.coordinator.prompt(getattr(owner.harness, "manifest", {}))
-                        if self.coordinator else ""
-                    ),
-                    profile=owner.profile,
-                    user=owner.user_profile,
-                    task=self.task,
-                    plan=self.plan,
-                    memory=self.memory,
-                    budget=budget,
-                    allowed_tools=allowed,
-                    config=owner.config,
-                    history=self.messages,
-                    blocked_action_signatures=set(self.repeated),
-                )
-            except ContextBudgetError as exc:
-                return self.finish("terminated", "context_budget_exhausted", error=exc)
-            context_event = self.events.append(
-                "context_built",
-                {
-                    **context_metadata,
-                    "messages": [m.model_dump(mode="json") for m in messages],
-                    "system_prompt_sha256": digest(messages[0].content),
-                    "available_tools": allowed,
-                    "agent_role": self.coordinator.role if self.coordinator else "single",
-                },
-            )
-            try:
-                turn = owner.policy.decide(
-                    messages,
-                    [d for d in owner.registry.definitions if d.name in allowed],
-                )
-            except ProviderError as exc:
-                return self.finish("failed", "provider_error", error=exc)
-            self.turns.append(turn)
-            self.messages.append(turn.as_message())
-            turn_event = self.events.append(
-                "model_turn",
-                {
-                    "turn_number": len(self.turns),
-                    "agent_role": self.coordinator.role if self.coordinator else "single",
-                    "response": turn.model_dump(mode="json"),
-                    "tool_calls": [c.model_dump(mode="json") for c in turn.tool_calls],
-                    "usage": turn.usage.model_dump(mode="json") if turn.usage else None,
-                },
-                context_event.event_id,
-            )
-            if not turn.tool_calls:
-                return self.finish("failed", "model_stopped_without_submission")
-            calls = list(turn.tool_calls)
-            executable, refusal = self._batch_prefix(calls)
-            terminal: AgentObservation | None = None
-            for index, call in enumerate(calls):
-                if terminal is not None or self.pending_question is not None:
-                    observation = self._refuse_call(
-                        call,
-                        turn_event,
-                        "session_closed",
-                        "an earlier call in this same turn already closed the session; "
-                        "this call was not executed",
-                    )
-                elif index >= executable:
-                    observation = self._refuse_call(
-                        call,
-                        turn_event,
-                        refusal or "batch_not_supported",
-                        self._batch_refusal_message(refusal, index, len(calls)),
-                    )
-                else:
-                    if reason := self.limit_reason():
-                        return self.finish("terminated", reason)
-                    observation = self._execute_call(call, turn_event)
-                if terminal is None and observation.terminated:
-                    terminal = observation
-            if self.pending_question is not None:
-                return self.finish("waiting_for_user", "user_input_required")
-            if terminal is not None:
-                return self.finish(
-                    (
-                        "completed"
-                        if terminal.terminal_reason == "submitted"
-                        else "terminated"
-                    ),
-                    terminal.terminal_reason,
-                )
+            return self.finish("failed", "max_model_turns")
         if reason := self.limit_reason():
             return self.finish("terminated", reason)
-        return self.finish("failed", "max_model_turns")
+        budget = self.budget()
+        allowed = self.allowed(budget)
+        try:
+            messages, context_metadata = owner.context_builder.build(
+                # The role contract is a per-role variant, so it is appended
+                # after the policy shared by every role and every mode.
+                system_prompt=owner.skill.system_prompt,
+                variant_suffix=(
+                    self.coordinator.prompt(getattr(owner.harness, "manifest", {}))
+                    if self.coordinator else ""
+                ),
+                profile=owner.profile,
+                user=owner.user_profile,
+                task=self.task,
+                plan=self.plan,
+                memory=self.memory,
+                budget=budget,
+                allowed_tools=allowed,
+                config=owner.config,
+                history=self.messages,
+                blocked_action_signatures=set(self.repeated),
+            )
+        except ContextBudgetError as exc:
+            return self.finish("terminated", "context_budget_exhausted", error=exc)
+        context_event = self.events.append(
+            "context_built",
+            {
+                **context_metadata,
+                "messages": [m.model_dump(mode="json") for m in messages],
+                "system_prompt_sha256": digest(messages[0].content),
+                "available_tools": allowed,
+                "agent_role": self.coordinator.role if self.coordinator else "single",
+            },
+        )
+        try:
+            turn = owner.policy.decide(
+                messages,
+                [d for d in owner.registry.definitions if d.name in allowed],
+            )
+        except ProviderError as exc:
+            return self.finish("failed", "provider_error", error=exc)
+        self.turns.append(turn)
+        self.messages.append(turn.as_message())
+        turn_event = self.events.append(
+            "model_turn",
+            {
+                "turn_number": len(self.turns),
+                "agent_role": self.coordinator.role if self.coordinator else "single",
+                "response": turn.model_dump(mode="json"),
+                "tool_calls": [c.model_dump(mode="json") for c in turn.tool_calls],
+                "usage": turn.usage.model_dump(mode="json") if turn.usage else None,
+            },
+            context_event.event_id,
+        )
+        if not turn.tool_calls:
+            return self.finish("failed", "model_stopped_without_submission")
+        calls = list(turn.tool_calls)
+        executable, refusal = self._batch_prefix(calls)
+        terminal: AgentObservation | None = None
+        for index, call in enumerate(calls):
+            if terminal is not None or self.pending_question is not None:
+                observation = self._refuse_call(
+                    call,
+                    turn_event,
+                    "session_closed",
+                    "an earlier call in this same turn already closed the session; "
+                    "this call was not executed",
+                )
+            elif index >= executable:
+                observation = self._refuse_call(
+                    call,
+                    turn_event,
+                    refusal or "batch_not_supported",
+                    self._batch_refusal_message(refusal, index, len(calls)),
+                )
+            else:
+                if reason := self.limit_reason():
+                    return self.finish("terminated", reason)
+                observation = self._execute_call(call, turn_event)
+            if terminal is None and observation.terminated:
+                terminal = observation
+        if self.pending_question is not None:
+            return self.finish("waiting_for_user", "user_input_required")
+        if terminal is not None:
+            return self.finish(
+                (
+                    "completed"
+                    if terminal.terminal_reason == "submitted"
+                    else "terminated"
+                ),
+                terminal.terminal_reason,
+            )
+        return None
 
     def _batch_prefix(self, calls: list[ToolCall]) -> tuple[int, str | None]:
         """Decide how many calls of one assistant turn the runtime will execute.
@@ -624,6 +647,7 @@ class _Run:
         self.memory.observe(observation)
         return obs_event
 
+    @traced("tool")
     def _refuse_call(
         self, call: ToolCall, turn_event, error_code: str, message: str
     ) -> AgentObservation:
@@ -650,6 +674,7 @@ class _Run:
         self._append_tool_message(call, observation)
         return observation
 
+    @traced("tool")
     def _execute_call(self, call: ToolCall, turn_event) -> AgentObservation:
         owner = self.owner
         action = self._new_action(call)

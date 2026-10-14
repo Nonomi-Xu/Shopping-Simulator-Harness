@@ -232,6 +232,10 @@ def _add_interactive_arguments(parser):
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--orchestration-backend", choices=("native", "langgraph"), default=None,
+        help="Execution scheduler; defaults to native, or the saved config on resume.",
+    )
+    parser.add_argument(
         "--agent-mode", choices=("single", "multi"), default=None,
         help="multi uses planner/executor/observer; new chat tasks default to multi.",
     )
@@ -388,6 +392,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             load_dotenv(args.env_file, disabled=args.no_env_file)
             return _vector_index_command(args)
         args.runtime_config = _load_contract(args.runtime_config, RuntimeConfig)
+        if args.orchestration_backend is not None:
+            args.runtime_config = args.runtime_config.model_copy(
+                update={"orchestration_backend": args.orchestration_backend}
+            )
         if args.agent_mode is not None:
             args.runtime_config = args.runtime_config.model_copy(
                 update={"agent_mode": args.agent_mode}
@@ -416,6 +424,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ProviderError,
         RolloutError,
         TaskStoreError,
+        ImportError,
         ValueError,
         OSError,
     ) as exc:
@@ -510,6 +519,10 @@ def _interactive_command(args, branch):
         max_steps = args.max_steps
     if args.agent_mode is not None:
         config = config.model_copy(update={"agent_mode": args.agent_mode})
+    if args.orchestration_backend is not None:
+        config = config.model_copy(
+            update={"orchestration_backend": args.orchestration_backend}
+        )
     if args.source_key_env and not os.environ.get(args.source_key_env):
         raise CLIError("configured source credential environment variable is empty")
     # The public search contract exposes BM25 only: HttpProductSource validates a

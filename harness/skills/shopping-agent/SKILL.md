@@ -14,6 +14,41 @@ request. Use ask_user only for a consequential ambiguity and wait for the caller
 Reparse after each reply. Only caller-authorized replacement permits changing an
 existing hard constraint. Never automatically save a task choice as a long-term preference.
 
+## Prompt layout and prefix reuse
+
+The runtime sends one cache-shaped prompt:
+
+1. an invariant system policy: this Skill, its loaded references and the runtime
+   instructions;
+2. one user message with the current runtime state: profile, user profile, task
+   profile, plan, working memory, budget, available tools and advisory action
+   proposals;
+3. the append-only transcript of your assistant turns and their tool
+   observations.
+
+A provider prefix cache (for example DeepSeek context caching) reuses only the
+leading tokens that are byte-identical to the previous turn, so the runtime
+serializes the state block stable-first and appends new turns instead of
+rewriting old ones. Consequences for you:
+
+- read the current plan, working memory and budget from the state message of the
+  turn you are answering; it is refreshed every turn and earlier messages are
+  never updated.
+- your earlier reasoning is not replayed, and the acknowledgement of
+  `update_plan` or `record_evidence*` carries only its status and any rejection
+  message. The recorded plan and assessments appear in the next state message,
+  not in the acknowledgement, so read them there instead of repeating the call.
+- never expect an earlier message to be edited, withdrawn or reordered. A
+  revised requirement reaches you through the refreshed state block and
+  `task_profile.user_messages`.
+- recover archived detail with `read_evidence` instead of asking for a replay of
+  earlier messages.
+
+When editing this Skill, keep invariant policy at the top of each file and push
+conditional, degraded-case or mode-specific guidance to the end. Editing any
+Skill file changes `skill_sha256` and invalidates the cached prefix of later
+runs, so edit between runs, never during one.
+
 ## Load the contracts
 
 Before starting a task, read these files completely:
@@ -24,6 +59,10 @@ Before starting a task, read these files completely:
    observation shapes.
 3. [Shopping strategy](references/shopping-strategy.md) for query planning,
    candidate comparison, and stopping rules.
+
+The runtime concatenates them in exactly this order, and that order is part of
+the cached prefix: the most stable reference is declared first and the most
+frequently revised one last, so editing it invalidates fewer cached tokens.
 
 Treat those files as normative. If guidance conflicts, follow the tool contract
 for syntax, the agent definition for safety and termination, and the shopping

@@ -18,6 +18,42 @@ def normalized_query(query: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", query).casefold().split())
 
 
+#: Candidate identity fields re-sent every turn.  The rest of a raw search row
+#: (BM25 highlight snippets, full category paths) either repeats the title or the
+#: detail fact view, which both travel in the same state block.
+SUMMARY_FIELDS = ("asin", "title", "brand", "category", "price_min", "price_max", "rank")
+
+
+def summary_view(summary: dict) -> dict:
+    """Project a raw search row to its identity fields and useful snippets.
+
+    A ``match_snippets`` entry whose text already appears in the candidate title
+    or category adds nothing: in recorded runs 2.32 of 2.92 snippets per candidate
+    were such title echoes, and they were the largest single part of the bounded
+    memory view.  Description snippets are kept because nothing else carries them.
+    """
+    view = {key: summary[key] for key in SUMMARY_FIELDS if key in summary}
+    score = summary.get("bm25_score")
+    if isinstance(score, float):
+        # The ranking is already carried by ``rank``; the trailing digits are noise.
+        view["bm25_score"] = round(score, 3)
+    elif score is not None:
+        view["bm25_score"] = score
+    sources = (str(summary.get("title") or ""), str(summary.get("category") or ""))
+    snippets = [
+        snippet
+        for snippet in summary.get("match_snippets") or []
+        if isinstance(snippet, dict)
+        and not (
+            (snippet.get("text") or "")
+            and any(snippet["text"] in source for source in sources)
+        )
+    ]
+    if snippets:
+        view["match_snippets"] = snippets
+    return view
+
+
 class MemoryStore:
     version = "shopping-memory-v3"
 
@@ -399,6 +435,7 @@ class MemoryStore:
             "candidates": [
                 {
                     **c.model_dump(mode="json"),
+                    "summary": summary_view(c.summary),
                     "facts": self._fact_view(c),
                     "constraint_matrix": {
                         cid: (

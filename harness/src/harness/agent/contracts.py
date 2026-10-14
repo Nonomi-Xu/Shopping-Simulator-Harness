@@ -153,6 +153,7 @@ class SearchPlan(Contract):
 
 
 class RuntimeConfig(Contract):
+    orchestration_backend: Literal["native", "langgraph"] = "native"
     agent_mode: Literal["single", "multi"] = "single"
     interaction_mode: Literal["offline", "interactive"] = "offline"
     progressive_disclosure: bool = False

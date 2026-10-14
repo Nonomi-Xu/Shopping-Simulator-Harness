@@ -1,6 +1,7 @@
 """Model decision policy, separated from execution and runtime state ownership."""
 
 from ..providers import ModelProvider
+from .tracing import traced
 
 
 class ModelPolicy:
@@ -11,6 +12,7 @@ class ModelPolicy:
         self.tool_choice = tool_choice
         self.parameters = dict(parameters or {})
 
+    @traced("model")
     def decide(self, messages, definitions):
         return self.provider.complete(
             tuple(messages),

@@ -33,6 +33,8 @@ Shopping Simulator Harness 是一个轻量、可审计的购物推荐评测核�
 持久化运行记录与聚合指标。
 
 完整协议、模块边界、预算语义和迁移说明见 [Runtime v5 架构](docs/architecture.md)。
+现有运行时可选接入 LangSmith 追踪，并通过 `orchestration_backend="langgraph"` 使用角色图调度；
+安装、使用、状态恢复边界和同批轨迹对照见 [LangGraph 与追踪](docs/langgraph-tracing.md)。
 项目还提供用户澄清与恢复、显式长期偏好、长程交互 Episode，以及多配置重复实验。
 可以按目标选择入口：
 
@@ -567,11 +569,12 @@ shopping-agent rollout \
   --output-root outputs/rollouts
 ```
 
-正式数据集为 `Original`（源文件全部 23,421 个任务）和 `Test1`（源顺序第 1–500 题）。
+正式数据集为 `Original`（源文件全部 23,421 个任务）、`Test1`（源顺序第 1–500 题）和
+`Test2`（源顺序第 501–600 题，100 题；把测试题量由 500 调整为 100 的评测集，与 Test1 无重叠）。
 任务先按商品原始顺序、再按 instructions 顺序展开；冻结清单保存源 SHA-256 和完整任务 ID，
 位于顶层 `datasets/`，BM25 与 Harness 共用。旧 `all`/`test` 分别作为兼容入口；
 历史随机 test500 和 BM25 test10 不属于 Test1。商品检索始终使用完整商品库。
-可另冻结 Test2、Test3，已有不同清单不可覆盖。
+可另冻结 Test3 等，已有不同清单不可覆盖。
 
 本次双方法评测使用内存受控的 `src.harness.benchmark.runner`，每题完成立即落盘并释放
 完整结果，模型请求/响应和 Agent 事件在执行过程中持续记录。
@@ -624,7 +627,10 @@ outputs/rollouts/rollout_<UTC微秒时间>_<UUID>/
 `runs.jsonl` 的每条记录都带有 `consumption`，其中包含该任务的 wall time、模型轮次、
 Harness 工具调用数，以及输入、输出、缓存、缓存未命中、推理和总 Token。相同的精简
 记录会单独写入 `consumption.jsonl`，便于直接加载统计；Provider 价格可能变化，因此
-框架记录原始 Token，不自动换算金额。
+框架记录原始 Token，不自动换算金额。缓存命中率即 `cached / (cached + miss)`；
+Runtime 把每轮状态块按稳定字段优先序列化（profile、task、plan、memory 在前，
+预算与动作建议在后），并保持历史只追加，使同一任务的后续轮次尽量复用 Provider
+前缀缓存；布局、实测收益与核对方式见 [Runtime v5 架构](docs/architecture.md)。
 
 通用参数同时适用于 `run` 和 `rollout`：`--env-file` / `--no-env-file`、
 `--products-path`、`--index-path`、`--skill-dir`、`--provider`、`--model`、

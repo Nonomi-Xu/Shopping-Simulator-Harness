@@ -4,6 +4,10 @@ Harness 0.5 将 Agent 定义为七个有版本的数据与执行模块。`AgentR
 `AgentOrchestrator` 负责控制循环，`ShoppingHarness / ShoppingSession` 负责真实工具执行
 和评测隔离。底层商品目录、检索与 Evaluator 的评分含义不因重构而变化。
 
+编排支持 `RuntimeConfig.orchestration_backend=native|langgraph`，默认 native。
+LangGraph 后端以显式角色节点调度同一个单回合执行方法；LangSmith 可独立接入两个后端。
+业务状态、Session 和评测隔离继续沿用本页契约，详见 [图编排与追踪](langgraph-tracing.md)。
+
 第二阶段扩展了搜索参数、详情字段选择、比较与规格核验，并在上下文中提供轻量动作候选。
 参数示例、部分观察的归档语义和价格边界见 [第二阶段说明](stage-two.md)。
 
@@ -162,6 +166,51 @@ ContextBuilder 每轮重建 Profile + Plan + Memory + 最近完整 assistant/too
 再移除可选动作建议，最后减少
 记忆候选展示；完整事件与最终记忆仍保留。最新一组、原任务、约束和计划不做静默裁剪，
 必需信息无法放入时返回 context_budget_exhausted。
+
+消息顺序与状态字段顺序都按前缀缓存（DeepSeek context caching 等）设计。每轮请求固定为：
+系统策略（Skill + references + RUNTIME_INSTRUCTIONS，模式与角色附加文本排在最后）、
+一条状态消息、以及只追加的 assistant/tool 历史。Provider 只复用与上一轮逐字节相同的前缀，
+因此状态块按稳定优先顺序序列化，而不是 `canonical_json` 的字母序：
+
+```text
+profile, user_profile, task_profile, plan, memory, budget, allowed_tools, action_proposals
+```
+
+越靠前的字段每轮越可能不变，越靠后的每轮重建。字母序会把每轮都变的 `action_proposals`
+放在最前面，等于让整个状态块无法命中；在已记录的 DeepSeek rollout 上按字符模拟，
+稳定优先顺序把未命中比例从 52.7% 降到 38.7%（约 -26%）。字段顺序属于提示契约，
+不要为了“整齐”重排；`context_built` 事件记录 `prompt_layout` 以核对实际布局。
+
+历史按 `recent_turns` 保留最近若干完整组，窗口滑动会移动缓存边界，
+因此长任务中历史本身很少能整段命中；把状态块移到消息末尾并不能改善这一点
+（实测在相同数据上会多损失约 10%），真正有效的是保持前缀字段稳定。
+
+提示词还会丢弃三类“已经付过一次费”的内容（`prompt_message` / `summary_view`）：
+
+- 历史 assistant 消息里的 `reasoning_content` 不回传。结论已经体现在 plan、memory 和
+  动作里，DeepSeek 对 reasoning 模型也明确要求输入不得包含该字段；
+- 运行时工具 `update_plan` / `record_evidence` / `record_evidence_batch` 的观测只保留
+  `status`、`message`、`error_code` 与逐项 `{asin, constraint_id, status}`。它们的
+  `data` 是 plan/task_profile/assessments 的回声，`budget` 与 `allowed_next_tools` 与下一轮
+  状态块完全一致（在记录数据上分别 63/63、145/145 相同）；保留逐项判定是因为候选可能
+  掉出有界候选窗口（441 条判定中有 49 条在下一轮状态里已不可见）；
+- 候选 `summary` 只保留身份字段，并丢弃与标题或类目重复的 `match_snippets`
+  （记录数据里平均 2.92 条中有 2.32 条是标题回声）。
+
+在 40 个已记录的 DeepSeek 任务上按字符模拟，相对“仅字段序”版本，
+不回传 reasoning 再降 18.0%、回声投影降 2.7%、summary 去重降 3.7%，
+合计未命中字符降 24.5%（相对改动前共降 46.2%），每轮 prompt 体积降 10.6%。
+
+命中率用 Provider 上报的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 衡量，
+分别记录在 `consumption.jsonl` 与 `runs.jsonl` 的 `cached_input_tokens` /
+`cache_miss_input_tokens`，命中率即 `cached / (cached + miss)`；
+`tools/run_metrics.py` 的汇总也会给出 `cache_hit_rate`。
+`tools/prefix_cache_sim.py` 用历史 rollout 的 `context_built` 消息重放前缀比较，
+不调用 Provider 就能估算字段顺序、回声投影或窗口策略改动对命中率的影响
+（输出 `recorded` / `layout` / `current` 三列）。
+DeepSeek 的上下文缓存按账号生效且自动启用：跨任务能命中的只有完全不变的系统策略段，
+同一任务的后续轮次才能同时复用系统段和状态块的稳定前缀。
+多角色模式下角色切换很快，系统段每轮都可能重建，成本敏感时应使用默认单 Agent。
 
 context_max_chars 计量序列化消息字符数，不是 tokenizer token 数，也不包含单独发送的
 工具 Schema。上下文压缩配置及实际传给 Provider 的消息保存在 context_built 事件。

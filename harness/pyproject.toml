@@ -12,6 +12,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tracing = [
+    "langsmith>=0.4,<1",
+]
+graph = [
+    "langgraph>=1.0,<2",
+    "langsmith>=0.4,<1",
+]
 vector = [
     "numpy>=1.24,<3",
 ]
