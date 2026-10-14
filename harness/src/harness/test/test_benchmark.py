@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from src.harness.benchmark.datasets import freeze, load
+from src.harness.benchmark.datasets import digest, freeze, load, load_subset
 from src.harness.benchmark.runner import score_harness
 from src.harness.agent import AgentRunner
 from src.harness.agent.audit import RunAudit
@@ -41,6 +41,30 @@ class AuditTest(unittest.TestCase):
         path.write_text(json.dumps(broken))
         with self.assertRaises(ValueError):
             load(path, store)
+
+    def test_task_subset_must_be_a_valid_selection_of_the_parent(self):
+        store = self.harness._task_store
+        frozen = freeze(store, self.directory/'Test1.json', 'Test1', count=2)
+        path = self.directory/'dev.json'
+        payload = {'version': 'shopping-task-subset-v1', 'name': 'regression',
+                   'parent_dataset': 'Test1', 'parent_sha256': digest(frozen),
+                   'selection': 'fixed failure classes plus success controls',
+                   'task_ids': [frozen['task_ids'][1]]}
+        path.write_text(json.dumps(payload))
+        self.assertEqual(load_subset(path, frozen), payload)
+
+        for broken in [
+            {**payload, 'parent_sha256': '0'*64},
+            {**payload, 'parent_dataset': 'Original'},
+            {**payload, 'task_ids': ['task_not_in_the_parent']},
+            {**payload, 'task_ids': []},
+            {**payload, 'task_ids': [payload['task_ids'][0]]*2},
+            {**payload, 'name': ''},
+            {**payload, 'version': 'shopping-task-subset-v2'},
+        ]:
+            path.write_text(json.dumps(broken))
+            with self.assertRaises(ValueError):
+                load_subset(path, frozen)
 
     def test_model_trace_redacts_credentials_without_removing_usage(self):
         audit = RunAudit(self.directory/'redaction')

@@ -101,6 +101,10 @@ def generate(root, bm25_run_dir=None):
     if digest(dataset)!=config['dataset_sha256']:
         raise ValueError('dataset hash mismatch')
     expected_ids = dataset['task_ids'][:config['smoke_limit']] if config['smoke_limit'] else dataset['task_ids']
+    if config.get('subset'):
+        expected_ids = dataset['task_ids']
+        if config['task_ids'] != [i for i in expected_ids if i in set(config['task_ids'])]:
+            raise ValueError('subset task order is not the frozen dataset order')
     if config['task_ids'] != expected_ids or config['source_sha256'] != dataset['source_sha256']:
         raise ValueError('configuration is not the frozen selection')
     methods={}
@@ -187,8 +191,10 @@ def generate(root, bm25_run_dir=None):
     def fmt(v):return 'NA' if v is None else f'{v:,.2f}'
     def cell(s,key):
         m=s[key];return f"{m['hits']}/{m['total']} ({pct(m['rate'])})"
-    lines=[f"# {dataset['name']}：BM25 与 Harness 新评测报告" + ("（仅预检，不是500题结果）" if config["smoke_limit"] else ""),'',
-        f"本报告对照 {len(b)} 个共同任务 × 2 种方法。Original 共 {dataset['original_count']} 题；Test1 为源顺序展开后的第 1–500 题。",
+    subset_line = (f"本批次是冻结的显式子集 `{config['subset']['name']}`（SHA-256 `{config['subset']['sha256']}`），"
+                   "由失败类型与对照题固定选出，不能当作 Test1 总体成绩。") if config.get('subset') else ''
+    lines=[f"# {dataset['name']}：BM25 与 Harness 新评测报告" + ("（仅预检，不是500题结果）" if config["smoke_limit"] else "") + (f"（冻结子集：{config['subset']['name']}，不是500题结果）" if config.get('subset') else ''),'',
+        f"本报告对照 {len(b)} 个共同任务 × 2 种方法。Original 共 {dataset['original_count']} 题；Test1 为源顺序展开后的第 1–500 题。"] + ([subset_line] if subset_line else []) + [
         ('本报告使用全量重跑的 Harness 500 题，与已完成的同一 Test1 BM25 500 题配对；BM25 本次没有重复调用。' if bm25_run_dir else '本报告使用该批次的逐题结果。'), '',
         f"- Harness 批次：`{source_roots['harness']}`。",
         f"- BM25 批次：`{source_roots['bm25']}`。",

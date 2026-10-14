@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from ..agent.events import digest
 from ..paths import PROJECT_DIR
 from ..tasks import TaskStore, TASK_ID_VERSION
 
@@ -59,6 +60,34 @@ def load(path, store):
         selection['end_1based'] > len(original) or
         ids != original[selection['start_1based'] - 1:selection['end_1based']]):
         raise ValueError('frozen dataset membership/order mismatch')
+    return payload
+
+
+def load_subset(path, frozen):
+    """Load an explicit task subset drawn from a frozen dataset.
+
+    ``--limit`` can only take a prefix, which cannot express a stratified or
+    failure-selected development set.  A subset manifest is a frozen, hashable
+    selection instead: it records the parent dataset, the selection rule, and the
+    exact ordered task IDs, and it is validated against the parent dataset so a
+    subset can never introduce a task the parent does not contain.
+    """
+    payload = json.loads(Path(path).read_text(encoding='utf-8'))
+    if payload.get('version') != 'shopping-task-subset-v1':
+        raise ValueError('unsupported task subset version')
+    ids = payload.get('task_ids')
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i for i in ids):
+        raise ValueError('task subset needs a non-empty list of task IDs')
+    if len(ids) != len(set(ids)):
+        raise ValueError('task subset contains duplicate task IDs')
+    if payload.get('parent_dataset') != frozen['name']:
+        raise ValueError('task subset parent dataset mismatch')
+    if payload.get('parent_sha256') != digest(frozen):
+        raise ValueError('task subset parent hash mismatch')
+    if not set(ids) <= set(frozen['task_ids']):
+        raise ValueError('task subset is not contained in the frozen dataset')
+    if not isinstance(payload.get('name'), str) or not payload['name']:
+        raise ValueError('task subset needs a name')
     return payload
 
 

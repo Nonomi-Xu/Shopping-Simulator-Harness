@@ -30,7 +30,7 @@ from ..providers import (
     DeepSeekProvider,
     OllamaProvider,
 )
-from .datasets import load, sha256_file
+from .datasets import load, load_subset, sha256_file
 
 sys.path.insert(0, str(PROJECT_DIR / 'BM25'))
 from bm25_agent.tasks import TaskStore as BM25Tasks
@@ -108,7 +108,7 @@ def score_harness(result, target):
     }
 
 
-def run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, workers):
+def run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, workers, provider_parameters=None):
     directory = root / method
     directory.mkdir(exist_ok=True)
     (directory / 'tasks').mkdir(exist_ok=True)
@@ -171,7 +171,7 @@ def run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, w
                     'usage_complete': bool(selection and selection.usage), 'evaluation': asdict(e) if e else None}
             else:
                 # 'thinking' is a DeepSeek-only parameter; a local backend rejects it.
-                harness_parameters = {'temperature': 0}
+                harness_parameters = {'temperature': 0, **(provider_parameters or {})}
                 if config['provider'] == 'deepseek':
                     harness_parameters['thinking'] = {'type': config['harness_thinking']}
                 provider_class = OllamaProvider if config['provider'] == 'ollama' else DeepSeekProvider
@@ -265,8 +265,15 @@ def main():
     parser.add_argument('--harness-thinking', choices=['enabled', 'disabled'], default='enabled')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--max-retries', type=int, default=2)
+    parser.add_argument('--provider-parameters', type=json.loads, default=None, metavar='JSON',
+                        help='Extra non-reserved provider parameters as a JSON object, e.g. '
+                             '\'{"reasoning_effort":"none"}\' to disable local-model thinking')
     parser.add_argument('--limit', type=int, help='Only for an explicitly separate smoke run, not the final benchmark')
+    parser.add_argument('--subset', type=Path, metavar='JSON',
+                        help='Frozen task-subset manifest drawn from --dataset; use for regression/dev runs, not for the final 500-task report')
     args = parser.parse_args()
+    if args.limit is not None and args.subset is not None:
+        parser.error('--limit and --subset are mutually exclusive; a frozen subset is a complete selection')
     if not 1 <= args.workers <= 32:
         parser.error('workers must be 1..32')
     load_dotenv(PROJECT_DIR/'harness/src/.env')
@@ -274,7 +281,11 @@ def main():
     tasks, bm25_tasks = TaskStore(products), BM25Tasks(products)
     frozen = load(PROJECT_DIR/f'datasets/{args.dataset}.json', tasks)
     ids = frozen['task_ids']
-    if args.limit is not None:
+    subset = None
+    if args.subset is not None:
+        subset = load_subset(args.subset, frozen)
+        ids = list(subset['task_ids'])
+    elif args.limit is not None:
         if args.limit < 1: parser.error('limit must be positive')
         ids = ids[:args.limit]
     if tasks.list_task_ids('Original') != bm25_tasks.list_task_ids('Original'):
@@ -289,6 +300,9 @@ def main():
     default_model, default_base_url = benchmark_defaults[args.provider]
     model = args.model or default_model
     base_url = args.base_url or default_base_url
+    provider_parameters = args.provider_parameters or {}
+    if not isinstance(provider_parameters, dict):
+        parser.error('--provider-parameters must be a JSON object')
     config = {'version': 'shopping-paired-benchmark-v1', 'transport_version': 'same-origin-redirect-v1', 'dataset': args.dataset,
         'dataset_sha256': digest(frozen), 'source_sha256': tasks.product_data_sha256,
         'index_sha256': sha256_file(index), 'task_ids': ids, 'smoke_limit': args.limit,
@@ -296,8 +310,12 @@ def main():
         'bm25_thinking': 'disabled', 'harness_thinking': args.harness_thinking, 'timeout': args.timeout, 'max_retries': args.max_retries,
         'runtime': runtime, 'max_steps': 20, 'max_model_turns': 40,
         'harness_tool_choice': 'auto', 'bm25_tool_choice': 'select_product',
+        'provider_parameters': provider_parameters,
         'harness_skill_sha256': load_agent_skill().source_sha256,
         'recommendation_policy': 'existing methods; report Strict@1 and Strict-any separately'}
+    if subset is not None:
+        config['subset'] = {'name': subset['name'], 'sha256': sha256_file(args.subset),
+                            'task_count': len(ids), 'selection': subset.get('selection')}
     root = (args.run_dir or OUTPUTS_DIR/'benchmarks'/new_run_id(args.dataset)).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     if (root/'config.json').exists():
@@ -314,7 +332,8 @@ def main():
     print(json.dumps({'run_dir': str(root), 'task_count': len(ids), 'method': args.method}), flush=True)
     with BM25Catalog(index) as catalog, ShoppingHarness(products_path=products, index_path=index) as harness:
         for method in (['bm25', 'harness'] if args.method == 'both' else [args.method]):
-            run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, args.workers)
+            run_method(method, root, ids, tasks, bm25_tasks, catalog, harness, config, args.workers,
+                       provider_parameters)
 
 
 if __name__ == '__main__':
