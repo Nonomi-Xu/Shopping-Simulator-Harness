@@ -102,6 +102,11 @@ class OllamaProvider(OpenAICompatibleProvider):
         "; start the local runtime with 'ollama serve'"
         " (or 'brew services start ollama') and pull a model with 'ollama pull <model>'"
     )
+    timeout_hint = (
+        "; the model is running but did not finish in time. Local generation is"
+        " much slower than the hosted API — raise --timeout, lower --max-steps,"
+        " or disable thinking with --provider-parameters '{\"reasoning_effort\":\"none\"}'"
+    )
     # DeepSeek-only switch that Ollama has no concept of.  ``reasoning_effort``
     # and ``think`` are deliberately *not* stripped: Ollama uses them to control
     # thinking mode on hybrid-reasoning models such as Qwen3, so callers must be

@@ -174,6 +174,18 @@ class OllamaProviderTests(unittest.TestCase):
 
         self.assertIn("ollama serve", str(caught.exception))
 
+    def test_timeout_does_not_advise_starting_a_running_server(self) -> None:
+        def opener(request, *, timeout):
+            raise TimeoutError("timed out")
+
+        provider = OllamaProvider(opener=opener, max_retries=0, sleeper=lambda _: None)
+        with self.assertRaises(OllamaAPIError) as caught:
+            provider.complete([ChatMessage(role="user", content="x")])
+
+        message = str(caught.exception)
+        self.assertNotIn("ollama serve", message)
+        self.assertIn("--timeout", message)
+
     def test_defaults_are_slower_than_the_hosted_api(self) -> None:
         self.assertGreater(OllamaProvider().timeout, DeepSeekProvider(api_key="k").timeout)
 

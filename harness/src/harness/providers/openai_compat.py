@@ -137,6 +137,8 @@ class OpenAICompatibleProvider:
     tolerate_missing_usage_counters = False
     #: Appended to transport failures to explain how to start a local backend.
     connection_hint = ""
+    #: Appended when the backend answered too slowly instead of not at all.
+    timeout_hint = ""
 
     def __init__(
         self,
@@ -399,8 +401,14 @@ class OpenAICompatibleProvider:
                 if self.request_observer is not None:
                     self.request_observer("error", {"type": type(error).__name__, "message": str(error), "attempt": attempt + 1})
                 reason = getattr(error, "reason", error)
+                # A timeout means the server is reachable but slow, so advising
+                # the operator to start it would be actively misleading.
+                timed_out = isinstance(error, TimeoutError) or "timed out" in str(
+                    reason
+                ).lower()
+                hint = self.timeout_hint if timed_out else self.connection_hint
                 api_error = self._api_error(
-                    f"{self.label} API request failed: {reason}{self.connection_hint}",
+                    f"{self.label} API request failed: {reason}{hint}",
                     retryable=True,
                 )
                 if attempt < self.max_retries:
