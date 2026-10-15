@@ -35,6 +35,7 @@ Shopping Simulator Harness 是一个轻量、可审计的购物推荐评测核�
 完整协议、模块边界、预算语义和迁移说明见 [Runtime v5 架构](docs/architecture.md)。
 现有运行时可选接入 LangSmith 追踪，并通过 `orchestration_backend="langgraph"` 使用角色图调度；
 安装、使用、状态恢复边界和同批轨迹对照见 [LangGraph 与追踪](docs/langgraph-tracing.md)。
+本机图调试、离线演示及真实模型配置见 [Studio 本机部署](docs/studio-local.md)。
 项目还提供用户澄清与恢复、显式长期偏好、长程交互 Episode，以及多配置重复实验。
 可以按目标选择入口：
 

@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "shopping": "src.harness.branch.studio:graph"
+  },
+  "env": "studio.env"
+}

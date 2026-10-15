@@ -17,6 +17,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.langgraph_api/
 *.egg-info/
 build/
 dist/

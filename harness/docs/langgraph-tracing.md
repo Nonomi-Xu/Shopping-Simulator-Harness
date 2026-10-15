@@ -69,8 +69,8 @@ export LANGSMITH_TRACING=true
 评分仍保存在本地 `evaluation.json`。遥测写入失败不会重试购物动作，也不会改变返回结果。
 原 `event_observer` 和哈希事件链继续独立工作。
 
-这一步接入的是 LangSmith 运行追踪。尚未提供 Agent Server/Studio 服务入口；
-图调试器中的任意节点恢复和状态编辑也不在当前实现范围。
+核心 AgentRunner 后端提供运行追踪。独立的本机 Agent Server/Studio 交互入口已经加入，
+启动方式与 checkpoint 边界见 [本机 Studio 部署](studio-local.md)。
 官方说明：[Tracing](https://docs.langchain.com/langsmith/annotate-code)、
 [Studio](https://docs.langchain.com/langsmith/studio)。
 

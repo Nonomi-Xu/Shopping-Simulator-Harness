@@ -12,6 +12,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+studio = [
+    "langgraph>=1.2.12,<2",
+    "langsmith>=0.4,<1",
+    "langgraph-cli[inmem]>=0.4,<1; python_version >= '3.11'",
+]
 tracing = [
     "langsmith>=0.4,<1",
 ]
